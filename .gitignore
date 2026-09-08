@@ -1,0 +1,23 @@
+# LA config : elle contient le jeton du bot et le mot de passe CYU.
+config.yaml
+
+# Donnees locales : cache CELCAT, carnet de devoirs, etat du daemon.
+donnees/
+
+# Exports
+*.ics
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Editeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

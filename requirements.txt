@@ -1,0 +1,3 @@
+requests>=2.31
+discord.py>=2.3
+PyYAML>=6.0

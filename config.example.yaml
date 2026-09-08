@@ -1,0 +1,196 @@
+# ════════════════════════════════════════════════════════════════════════════
+#  Assistant CYU — configuration
+# ════════════════════════════════════════════════════════════════════════════
+#
+#  Copie ce fichier en `config.yaml` et remplis-le :
+#
+#      cp config.example.yaml config.yaml
+#
+#  `config.yaml` contient des mots de passe. Il est dans .gitignore : il ne
+#  part JAMAIS sur GitHub. Ce fichier-ci, l'exemple, est fait pour y aller.
+#
+#  Tout ce qui est absent de ton config.yaml prend la valeur qu'il a ici :
+#  tu peux donc n'y mettre que les trois secrets et laisser tout le reste.
+#
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# ─── Discord ────────────────────────────────────────────────────────────────
+discord:
+
+  # Portail developpeur Discord > ton application > Bot > Reset Token.
+  bot_token: ""
+
+  # La categorie qui contient les salons de l'assistant.
+  # Clic droit sur la categorie > Copier l'identifiant (mode developpeur).
+  # Sert uniquement a `python assistant.py salons`, qui cree les salons.
+  categorie_id: ""
+
+  # Facultatif. Vide = le bot publie ses commandes sur tous les serveurs ou il
+  # se trouve. Ne remplis que si tu veux le limiter a un seul serveur.
+  serveur_id: ""
+
+  # Qui est mentionne sur les alertes vraiment urgentes.
+  mention: ""
+  mentions_actives: true
+
+  # Filet de securite : tout salon laisse vide ci-dessous atterrit ici.
+  # Une URL de webhook marche sans bot et sans aucune permission.
+  webhook_secours: ""
+
+  # ── Les salons ────────────────────────────────────────────────────────────
+  #
+  # Un salon par type de message : tu regles les notifications Discord
+  # separement pour chacun (annonces en « tout », logs en muet).
+  #
+  # Mets un IDENTIFIANT DE SALON (que des chiffres, clic droit > Copier
+  # l'identifiant) ou une URL DE WEBHOOK. Vide = webhook_secours.
+  #
+  # Deux salons peuvent partager la meme valeur, et
+  # `python assistant.py salons` les cree tous et ecrit les identifiants ici
+  # tout seul si tu preferes.
+  salons:
+
+    # Briefing du matin, briefing du soir, recap du dimanche.
+    annonces: ""
+
+    # Le tableau de l'emploi du temps de la semaine, remis a jour tout seul
+    # dans un seul et meme message. Les changements sans urgence aussi.
+    edt: ""
+
+    # Echeances, relance de fin de journee, carnet de devoirs.
+    devoirs: ""
+
+    # Cours annule ou deplace qui touche aujourd'hui ou demain, panne CELCAT.
+    # C'est le seul salon qui te mentionne.
+    alertes: ""
+
+    # Un unique message d'etat, reecrit en permanence : prochain cours,
+    # fraicheur des donnees, webmail, devoirs en attente, uptime du bot.
+    statut: ""
+
+    # Ton salon fourre-tout : c'est la que tu tapes tes commandes, et la que
+    # l'assistant epingle son panneau de boutons.
+    commandes: ""
+
+    # Demarrages, erreurs, heartbeats. A mettre en muet.
+    logs: ""
+
+
+# ─── CYU : CELCAT et webmail ────────────────────────────────────────────────
+cyu:
+
+  # CELCAT n'est pas derriere le SSO casse du webmail : c'est un formulaire
+  # LDAP classique, un script peut s'y connecter.
+  user: ""
+  password: ""
+
+  celcat_base: "https://celcat-calendar.cyu.fr"
+
+  # Le `fid0=` de ton URL CELCAT (/cal?...&fid0=12345678).
+  federation_id: ""
+
+  # Le `et=` de la meme URL. 104 = etudiant.
+  res_type: "104"
+
+  # Jours regardes en avant. Large volontairement : c'est ce qui permet de
+  # voir l'emploi du temps APPARAITRE, donc il faut regarder la ou il n'y a
+  # encore rien.
+  horizon_jours: 28
+
+  # Le webmail surveille par uptime.py.
+  webmail_url: "https://mail.etu.cyu.fr/mail"
+  webmail_intervalle: 60      # secondes entre deux essais
+  webmail_heartbeat: 60       # recap dans #logs tous les N essais (~1 h)
+
+
+# ─── Toi ────────────────────────────────────────────────────────────────────
+moi:
+  # Sert a calculer l'heure de lever conseillee dans le briefing du soir.
+  trajet_minutes: 45
+  preparation_minutes: 30
+
+  # Bornes d'une journee type : la grille de l'emploi du temps et le calcul
+  # des creneaux libres s'arretent la.
+  journee_debut: "08:00"
+  journee_fin: "19:00"
+
+
+# ─── Quand etre prevenu ─────────────────────────────────────────────────────
+notifications:
+
+  # Le briefing du matin : toute la journee d'un coup.
+  briefing_matin: "07:00"
+
+  # Le briefing du soir : demain, l'heure de lever, les echeances.
+  briefing_soir: "20:00"
+
+  # Le recap de la semaine. jour : 0 = lundi ... 6 = dimanche.
+  recap_semaine_jour: 6
+  recap_semaine_heure: "18:00"
+
+  # RAPPELS AVANT CHAQUE COURS — vide par defaut, et c'est voulu : les deux
+  # briefings suffisent, un rappel par cours finit par etre du bruit.
+  # Si tu en veux quand meme : [20] pour un rappel 20 min avant.
+  avant_cours_minutes: []
+
+  # Un seul rappel, pour le PREMIER cours de la journee seulement, sans les
+  # suivants. Mets un nombre de minutes (45) pour l'activer, null pour non.
+  # C'est le bon compromis si tu veux etre pousse a partir de chez toi.
+  premier_cours_minutes: null
+
+  # Avec avant_cours_minutes, ne rappelle que le premier cours d'un bloc qui
+  # s'enchaine, au lieu de sonner a chaque intercours.
+  seulement_premier_du_bloc: true
+
+  # « tu as eu Algo et Anglais, des devoirs a noter ? », apres le dernier cours.
+  relance_devoirs: true
+  relance_devoirs_apres_minutes: 20
+
+  # Echeances rappelees dans le briefing du soir, en jours restants.
+  devoirs_jours_avant: [7, 3, 1, 0]
+
+  # Frequence de verification de l'emploi du temps, en minutes.
+  verif_edt_minutes: 15
+
+  # Frequence de reecriture du message de statut et du tableau EDT, en minutes.
+  # Discord limite les modifications de message : ne descends pas sous 5.
+  rafraichir_tableaux_minutes: 10
+
+  # Ne rien envoyer entre ces deux heures, sauf les alertes urgentes.
+  # Mets `null` a l'une des deux pour desactiver.
+  silence_de: "23:00"
+  silence_a: "06:30"
+
+
+# ─── Affichage ──────────────────────────────────────────────────────────────
+affichage:
+  # Un trou dans la journee n'est signale qu'a partir de cette duree.
+  trou_minutes: 45
+
+  # Un creneau libre n'est propose qu'a partir de cette duree.
+  creneau_libre_minutes: 60
+
+  # La grille de la semaine en barres. false = juste une liste par jour.
+  grille_semaine: true
+
+  # Colorise la grille (bleu CM, vert TD, rouge examen...). Si tu vois des
+  # codes du genre [0;34m au lieu de couleurs, passe a false.
+  grille_couleurs: true
+
+  # Nombre de jours affiches par la grille de la semaine (5 = lun-ven).
+  grille_jours: 5
+
+
+# ─── Matieres ───────────────────────────────────────────────────────────────
+#
+# Pour relier un devoir a un cours quand les intitules ne collent pas.
+# Le rattachement marche deja tout seul quand le nom est contenu dans le
+# module ou le titre du cours ("maths" trouve "MATH101", le pluriel est gere).
+# N'ajoute ici que les cas ou ca ne suffit pas :
+#
+#   matieres:
+#     anglais: ["LANG201", "english"]
+#     projet:  ["PROJ100", "integrateur"]
+#
+matieres: {}
