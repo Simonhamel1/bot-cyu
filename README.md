@@ -14,12 +14,12 @@ fichier : **`config.yaml`**. Aucun fichier Python n'a de valeur à modifier.
 
 | Quand | Où | Quoi |
 | --- | --- | --- |
-| **7 h** | `#annonces` | la journée entière : cours, salles, trous, ce qu'il faut rendre |
-| **20 h** | `#annonces` | demain, l'heure de lever conseillée, les échéances qui approchent |
-| **dimanche 18 h** | `#annonces` | la semaine qui vient, sa charge, **et son image** |
+| **7 h** | `#annonces` | **la photo de la journée** : cours, salles, trous, ce qu'il faut rendre |
+| **20 h** | `#annonces` | **la photo de demain**, l'heure de lever conseillée, les échéances |
+| **dimanche 18 h** | `#annonces` | **la photo de la semaine** qui vient et sa charge |
 | fin de journée | `#devoirs` | « tu as eu Corporate finance et VBA, des devoirs à noter ? » |
-| en continu | `#alertes` | cours déplacé, annulé, changement de salle |
-| en permanence | `#edt` · `#statut` | deux tableaux réécrits sur place, **sans notification** |
+| dès qu'un cours bouge | `#alertes` | **la photo du changement**, et **il te tague** |
+| en permanence | `#edt` · `#statut` | l'image de la semaine et le panneau d'état, réécrits sur place, **sans notification** |
 
 Il n'envoie **pas** de rappel 20 min avant chaque cours : c'était du bruit, les
 deux briefings disent tout. Si tu en veux quand même, remplis
@@ -44,27 +44,62 @@ L'assistant rapproche les deux côtés et dit ce qui s'est réellement passé :
 ```
 
 Six cas distincts : annulé, déplacé un autre jour, déplacé dans la journée,
-changement de salle, durée modifiée, changement d'intervenant. Tu n'es
-mentionné que si ça touche aujourd'hui ou demain.
+changement de salle, durée modifiée, changement d'intervenant. Le tout arrive
+**en photo dans `#alertes`, et il te tague** — c'est tout l'intérêt d'avoir un
+bot. (`ping_changements: false` dans `config.yaml` si tu ne veux la mention
+que pour ce qui touche aujourd'hui ou demain.)
 
-### Il dessine ton emploi du temps
+### Et il ne raconte pas n'importe quoi
 
-`/photo jusqu_au:12/10` rend une vraie grille en image — une colonne par jour,
-un bloc coloré par cours, les semaines empilées :
+Un bot qui crie au loup, on finit par le couper. Quatre garde-fous, dans
+`actu.py` :
+
+| Le piège | Ce qu'il fait |
+| --- | --- |
+| le bot redémarre | la référence est **sur le disque**, pas en mémoire : ce qui a bougé pendant qu'il était éteint est annoncé au démarrage suivant, pas avalé |
+| l'horizon glisse d'un jour chaque matin | la comparaison est **bornée à la fenêtre commune** aux deux lectures — sinon le jour gagné passerait pour des ajouts, et le jour perdu pour des annulations |
+| CELCAT répond à moitié | un emploi du temps qui perd d'un coup **plus de la moitié** de ses cours n'est pas cru : l'ancienne référence est gardée, rien n'est annoncé, et `#logs` le dit. Trois lectures identiques finissent par être acceptées — un semestre peut vraiment se terminer |
+| un cours bouge, revient, rebouge | chaque changement annoncé laisse sa **signature** dans un journal : il n'est jamais annoncé deux fois |
+| le semestre entier sort d'un coup | ce n'est pas « 47 ajouts » mais **« l'emploi du temps est sorti »**, avec sa photo |
+
+Le journal garde un mois : c'est ce que `/actu` relit pour te redessiner ce
+qui a bougé cette semaine, sans redemander quoi que ce soit à CELCAT.
+
+### Il répond en photo, pas en liste
+
+Un embed Discord n'a ni colonnes, ni couleurs, ni alignement : une journée en
+texte est une liste, alors que c'est une **forme**. Tout ce qui gagne à être
+vu est donc dessiné.
+
+**Les jours sont à la verticale** — une ligne par jour, les heures de gauche à
+droite. Sur un téléphone, cinq colonnes étroites obligent à zoomer ; cinq
+lignes larges se lisent d'un coup. Le trait rouge marque l'heure qu'il est, la
+ligne du jour est surlignée, une semaine sans cours tient en une bande.
 
 ```text
-/photo                      les 7 prochains jours
-/photo jusqu_au:12/10       jusqu'au 12 octobre
-/photo jusqu_au:+21         les trois prochaines semaines
-/photo jusqu_au:vendredi
+/edt                     ta journée, en photo
+/edt 12/10               le 12 octobre
+/edt lundi               lundi prochain
+/edt quand:la semaine    la semaine, jours à la verticale
+/edt quand:+14           les quinze prochains jours
+/edt affichage:texte     la même chose en texte, pour copier-coller
 ```
+
+Cinq images différentes, chacune faite pour sa question : **la journée**
+(cours, trous, salles, profs, heure de lever, devoirs à rendre), **la
+période** (la grille, semaine par semaine), **les changements** (avant ➜
+après), **les devoirs** (triés par urgence) et **le prochain cours** (en
+grand, avec l'heure de partir).
+
+Sans Pillow installé, aucune commande ne casse : tout retombe sur le texte.
 
 ### Il répond aux commandes
 
 | Commande | Effet |
 | --- | --- |
-| `/edt [quand]` | l'emploi du temps en texte : aujourd'hui, demain, la semaine, un jour |
-| `/photo [jusqu_au]` | l'emploi du temps **en image**, jusqu'à la date voulue |
+| `/edt [quand]` | **l'emploi du temps en photo** : rien, une date (`12/10`), un jour (`lundi`), `demain`, `la semaine`, `+14`… |
+| `/photo [du] [au]` | une période précise, en photo |
+| `/actu [jours]` | **ce qui a changé** dans l'emploi du temps, en photo |
 | `/prochain` | le prochain cours, la salle, et dans combien de temps |
 | `/devoirs` | ce qu'il reste à faire, avec un bouton ✅ par devoir |
 | `/devoir` | un formulaire pour en ajouter un |
@@ -110,8 +145,8 @@ pip install -r requirements.txt
 ```
 
 `requests`, `discord.py`, `PyYAML`, et `Pillow` pour les images. Sans Pillow,
-tout fonctionne sauf `/photo`. Sur un serveur nu, ajoute aussi une police pour
-que l'image sorte avec ses accents :
+tout fonctionne, mais tout sort en texte. Sur un serveur nu, installe aussi une
+police, sinon les accents disparaissent des images :
 
 ```bash
 sudo apt install -y fonts-dejavu-core
@@ -192,7 +227,9 @@ python assistant.py demain
 python assistant.py semaine                   # la grille + le détail
 python assistant.py prochain                  # le prochain cours
 python assistant.py libre                     # les créneaux libres
-python assistant.py image --jusqu-au 12/10    # le PNG de l'emploi du temps
+python assistant.py image --jusqu-au 12/10    # le PNG d'une période
+python assistant.py photo --jour 12/10        # le PNG d'une journée
+python assistant.py actu --jours 7            # ce qui a bougé, en PNG
 python assistant.py tableaux                  # réécrire #statut et #edt
 python assistant.py ics                       # export agenda
 python assistant.py daemon                    # la boucle de fond seule
@@ -207,12 +244,13 @@ cache sans se connecter à CELCAT.
 
 ### Écrire une date
 
-La même grammaire partout — pour `/photo` comme pour l'échéance d'un devoir :
+La même grammaire partout — pour `/edt` comme pour l'échéance d'un devoir :
 
 ```text
 12/10 · 12/10/2026 · 2026-10-12
 demain · lundi · apres-demain
-+21                        dans 21 jours
++21                        les 21 prochains jours
+la semaine · la semaine prochaine
 prochain:vba               ton prochain cours de VBA, avec son heure exacte
 ```
 
@@ -330,7 +368,8 @@ systemctl --user stop assistant-cyu
 | `celcat.py` | connexion CELCAT, lecture des cours, cache disque |
 | `changements.py` | rapproche deux versions de l'EDT et dit ce qui a bougé |
 | `vue.py` | toute la mise en forme texte : journée, grille, devoirs, .ics |
-| `image.py` | le rendu PNG de l'emploi du temps (Pillow) |
+| `image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours (Pillow) |
+| `actu.py` | le suivi des changements : référence sur disque, garde-fous, anti-doublon, journal d'un mois |
 | `devoirs.py` | le carnet de devoirs et ses échéances « prochain cours de X » |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |

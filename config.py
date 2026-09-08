@@ -210,6 +210,11 @@ RAFRAICHIR_TABLEAUX_MINUTES = max(5, _entier(_notif, "rafraichir_tableaux_minute
 SILENCE_DE = _txt(_notif, "silence_de")
 SILENCE_A = _txt(_notif, "silence_a")
 
+# Etre mentionne des qu'un cours bouge, et pas seulement quand ca touche
+# aujourd'hui ou demain : un cours annule la semaine prochaine merite aussi
+# qu'on le sache tout de suite.
+PING_CHANGEMENTS = _bool(_notif, "ping_changements", True)
+
 
 # --- Affichage ---------------------------------------------------------------
 TROU_MINUTES = _entier(_aff, "trou_minutes", 45)
@@ -219,6 +224,14 @@ GRILLE_JOURS = min(7, max(1, _entier(_aff, "grille_jours", 5)))
 # Discord colorise les blocs ```ansi. Si un client affiche des codes bizarres
 # du genre [0;34m au lieu de couleurs, mets grille_couleurs: false.
 GRILLE_COULEURS = _bool(_aff, "grille_couleurs", True)
+
+# Les images. Sans Pillow, tout retombe automatiquement sur le texte : ces
+# reglages servent a s'en passer volontairement, pas a reparer une panne.
+IMAGES = _bool(_aff, "images", True)
+# Le salon #edt contient l'image de la semaine, reecrite sur place.
+TABLEAU_EDT_IMAGE = _bool(_aff, "tableau_edt_image", True)
+# Les briefings du matin et du soir sont accompagnes de la photo de la journee.
+BRIEFING_IMAGE = _bool(_aff, "briefing_image", True)
 
 
 # --- Matieres ----------------------------------------------------------------

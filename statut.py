@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 import celcat
 import config
 import devoirs as dv
+import image
 import notif
 import vue
 from celcat import _dt
@@ -187,14 +188,63 @@ def publier(cours, liste_devoirs=None, demarrage=None, echecs=0):
         pied=f"mis a jour toutes les {config.RAFRAICHIR_TABLEAUX_MINUTES} min")
 
 
+def _resume_semaine(cours, liste_devoirs, lundi):
+    """Les deux ou trois lignes qui accompagnent l'image dans #edt.
+
+    L'image dit la forme de la semaine ; ces lignes disent ce qu'une image ne
+    peut pas dire — dans combien de temps est le prochain cours, et ce qu'il
+    faut rendre."""
+    lignes = []
+    suivant = celcat.prochain(cours)
+    if suivant:
+        lignes.append(f"⏭️ **Prochain** — `{suivant.creneau}` "
+                      f"{vue.jour_relatif(suivant.jour)} · {suivant.titre} · "
+                      f"{suivant.ou} ({vue.compte_a_rebours(suivant.debut)})")
+    restants = dv.actifs(liste_devoirs, 7)
+    if restants:
+        lignes.append(f"📚 **{len(restants)} devoir"
+                      f"{'s' if len(restants) > 1 else ''} sous 7 jours** — "
+                      + ", ".join(d["titre"][:28] for d in restants[:4]))
+    total = sum(c.minutes for c in cours
+                if c.est_cours and lundi <= c.jour <= lundi + timedelta(days=6))
+    if total:
+        lignes.append(f"-# {vue.duree_fr(total)} de cours cette semaine · "
+                      f"`/edt` pour un jour precis, `/actu` pour ce qui a bougé")
+    return lignes
+
+
 def publier_tableau_edt(cours, liste_devoirs=None, lundi=None):
     """Reecrit le tableau de la semaine dans #edt.
 
     Meme principe que le panneau de statut : le salon ne contient qu'un
-    message, celui de la semaine en cours, et il est toujours juste."""
+    message, celui de la semaine en cours, et il est toujours juste. Depuis
+    que l'image existe, ce message EST l'image : c'est la vue qu'on regarde
+    dix fois par jour, elle merite mieux qu'une liste.
+
+    Retombe sur le tableau en texte si Pillow manque ou si le dessin echoue :
+    un salon vide serait pire qu'un tableau moins joli.
+    """
     lundi = lundi or celcat.semaine_de(date.today())
+    titre = f"Semaine du {lundi:%d/%m}"
+
+    if config.IMAGES and config.TABLEAU_EDT_IMAGE and image.DISPONIBLE:
+        try:
+            chemin = image.rendre(cours, lundi, lundi + timedelta(days=6),
+                                  config.DONNEES / "tableau-edt.png", titre=titre)
+            ok = notif.epingler_image(
+                "tableau-edt", chemin, titre,
+                _resume_semaine(cours, liste_devoirs, lundi),
+                couleur="cours", canal="edt",
+                pied=f"mis a jour toutes les {config.RAFRAICHIR_TABLEAUX_MINUTES} min")
+            if ok:
+                return True
+            print("[!] image de #edt non publiee, retour au tableau texte",
+                  flush=True)
+        except (image.PillowManquant, OSError, ValueError) as e:
+            print(f"[!] dessin de #edt impossible ({e}), retour au texte", flush=True)
+
     return notif.epingler(
-        "tableau-edt", f"Semaine du {lundi:%d/%m}",
+        "tableau-edt", titre,
         vue.tableau_semaine(cours, lundi, liste_devoirs),
         couleur="cours", canal="edt",
         pied="mis a jour tout seul · /edt pour un jour precis")

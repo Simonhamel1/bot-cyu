@@ -1,5 +1,6 @@
 requests>=2.31
 discord.py>=2.3
 PyYAML>=6.0
-# Rendu PNG de l'emploi du temps (/photo). Sans elle tout marche sauf /photo.
+# Le rendu en images : l'emploi du temps, les changements, les devoirs.
+# Sans elle, tout retombe sur le texte, mais on perd l'essentiel de l'interet.
 Pillow>=10.0

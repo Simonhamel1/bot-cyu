@@ -44,14 +44,32 @@ AJOUTE = "ajoute"
 ORDRE = [ANNULE, DEPLACE_JOUR, DEPLACE_HEURE, SALLE, DUREE, PROF, AJOUTE]
 
 ENTETES = {
-    ANNULE:        ("❌", "Annule"),
-    DEPLACE_JOUR:  ("📅", "Deplace a un autre jour"),
-    DEPLACE_HEURE: ("🕘", "Deplace dans la journee"),
+    ANNULE:        ("❌", "Annulé"),
+    DEPLACE_JOUR:  ("📅", "Déplacé à un autre jour"),
+    DEPLACE_HEURE: ("🕘", "Déplacé dans la journée"),
     SALLE:         ("🚪", "Changement de salle"),
-    DUREE:         ("⏱️", "Duree modifiee"),
+    DUREE:         ("⏱️", "Durée modifiée"),
     PROF:          ("👤", "Changement d'intervenant"),
-    AJOUTE:        ("➕", "Ajoute"),
+    AJOUTE:        ("➕", "Ajouté"),
 }
+
+# Le meme libelle au pluriel : « 3 changements de salle » ne s'ecrit pas en
+# ajoutant un s a la fin de « Changement de salle ».
+PLURIELS = {
+    ANNULE:        "Annulés",
+    DEPLACE_JOUR:  "Déplacés à un autre jour",
+    DEPLACE_HEURE: "Déplacés dans la journée",
+    SALLE:         "Changements de salle",
+    DUREE:         "Durées modifiées",
+    PROF:          "Changements d'intervenant",
+    AJOUTE:        "Ajoutés",
+}
+
+
+def libelle(type_, combien=1):
+    """Le nom d'un type de changement, accorde au nombre."""
+    return PLURIELS[type_] if combien > 1 else ENTETES[type_][1]
+
 
 # Un changement de salle ou de prof dans trois semaines ne merite pas de te
 # mentionner ; une annulation demain, si. Ce qui suit dit ce qui est « grave »
@@ -231,17 +249,17 @@ def bloc(liste, aujourd=None):
     if presses:
         quand = sorted({j for ch in presses for j in ch.jours} &
                        {aujourd, aujourd + timedelta(days=1)})
-        libelle = " et ".join("aujourd'hui" if j == aujourd else "demain"
-                              for j in quand)
-        lignes += [f"⚠️ **Ca touche {libelle}.**", ""]
+        moment = " et ".join("aujourd'hui" if j == aujourd else "demain"
+                             for j in quand)
+        lignes += [f"⚠️ **Ça touche {moment}.**", ""]
 
     for type_ in ORDRE:
         groupe = [ch for ch in liste if ch.type == type_]
         if not groupe:
             continue
-        icone, titre = ENTETES[type_]
-        pluriel = f" ({len(groupe)})" if len(groupe) > 1 else ""
-        lignes.append(f"{icone} **{titre}{pluriel}**")
+        icone = ENTETES[type_][0]
+        compte = f" ({len(groupe)})" if len(groupe) > 1 else ""
+        lignes.append(f"{icone} **{libelle(type_, len(groupe))}{compte}**")
         for ch in groupe[:8]:
             lignes += ["⠀⠀" + l if not l.startswith("⠀") else l
                        for l in decrire(ch)]

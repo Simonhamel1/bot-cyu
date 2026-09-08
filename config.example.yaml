@@ -164,6 +164,12 @@ notifications:
 
 
 # ─── Affichage ──────────────────────────────────────────────────────────────
+  # Etre mentionne des qu'un cours bouge (deplace, annule, salle changee),
+  # et pas seulement quand ca touche aujourd'hui ou demain.
+  # false = mention uniquement pour ce qui est urgent.
+  ping_changements: true
+
+
 affichage:
   # Un trou dans la journee n'est signale qu'a partir de cette duree.
   trou_minutes: 45
@@ -180,6 +186,19 @@ affichage:
 
   # Nombre de jours affiches par la grille de la semaine (5 = lun-ven).
   grille_jours: 5
+
+  # ── Les images ────────────────────────────────────────────────────────────
+  # L'assistant repond en PHOTO partout ou c'est plus lisible : la journee, la
+  # semaine (les jours a la verticale), les changements, les devoirs.
+  # Sans Pillow installe, tout retombe tout seul sur le texte.
+  images: true
+
+  # Le salon #edt contient l'image de la semaine, reecrite sur place (donc
+  # sans jamais notifier). false = le tableau en texte, comme avant.
+  tableau_edt_image: true
+
+  # Les briefings du matin et du soir arrivent avec la photo de la journee.
+  briefing_image: true
 
 
 # ─── Matieres ───────────────────────────────────────────────────────────────

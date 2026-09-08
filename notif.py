@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -144,19 +145,50 @@ def _poster(canal, charge, rendre_message=False):
         return None
 
 
-def envoyer_fichier(chemin, titre="", corps="", canal="commandes", couleur="cours",
-                    ping=False):
-    """Poste un fichier (typiquement le PNG de l'emploi du temps).
+def _requete_fichier(methode, url, entetes, charge, chemin):
+    """POST ou PATCH multipart : un embed ET une image, en une seule requete.
 
-    Discord veut du multipart pour les pieces jointes, pas du JSON : la charge
-    utile part donc dans un champ `payload_json` a cote du fichier. C'est la
-    seule requete du module qui ne passe pas par _poster().
+    Discord veut du multipart des qu'il y a une piece jointe, pas du JSON : la
+    charge utile part dans un champ `payload_json` a cote du fichier. C'est la
+    seule forme de requete du module qui ne passe pas par _requete().
     """
-    from pathlib import Path
+    try:
+        with open(chemin, "rb") as f:
+            r = requests.request(
+                methode, url, headers=entetes, timeout=60,
+                data={"payload_json": json.dumps(charge)},
+                files={"files[0]": (Path(chemin).name, f, "image/png")})
+    except (requests.RequestException, OSError) as e:
+        print(f"[!] envoi de l'image echoue : {e}", flush=True)
+        return None
+    if r.status_code == 429:
+        time.sleep(min(float(r.json().get("retry_after", 2)), 10))
+        return _requete_fichier(methode, url, entetes, charge, chemin)
+    return r
 
+
+def _charge_image(chemin, titre, corps, couleur, pied, ping):
+    contenu, autorisees = _mention(ping)
+    charge = {"content": contenu, "allowed_mentions": autorisees,
+              "attachments": [{"id": 0, "filename": Path(chemin).name}]}
+    if titre or corps:
+        charge["embeds"] = [embed(titre or Path(chemin).stem, corps, couleur, pied)]
+        # L'image est montree DANS l'embed : sinon Discord affiche l'embed puis
+        # la piece jointe en dessous, et on lit deux fois la meme chose.
+        charge["embeds"][0]["image"] = {"url": f"attachment://{Path(chemin).name}"}
+    return charge
+
+
+def envoyer_image(chemin, titre="", corps="", canal="commandes", couleur="cours",
+                  ping=False, pied=None):
+    """Poste une image (l'emploi du temps, les changements, les devoirs...).
+
+    C'est la fonction que le daemon utilise partout ou le texte Discord ne
+    rend pas justice au contenu, c'est-a-dire a peu pres partout.
+    """
     chemin = Path(chemin)
     if not chemin.exists():
-        print(f"[!] fichier introuvable : {chemin}", flush=True)
+        print(f"[!] image introuvable : {chemin}", flush=True)
         return False
 
     mode, cible = destination(canal)
@@ -169,28 +201,75 @@ def envoyer_fichier(chemin, titre="", corps="", canal="commandes", couleur="cour
             return False
         url = cible
 
-    contenu, autorisees = _mention(ping)
-    charge = {"content": contenu, "allowed_mentions": autorisees,
-              "attachments": [{"id": 0, "filename": chemin.name}]}
-    if titre or corps:
-        charge["embeds"] = [embed(titre or chemin.stem, corps, couleur)]
-        # L'image est montree DANS l'embed : sinon Discord affiche l'embed puis
-        # la piece jointe en dessous, et on lit deux fois la meme chose.
-        charge["embeds"][0]["image"] = {"url": f"attachment://{chemin.name}"}
-
-    try:
-        with open(chemin, "rb") as f:
-            r = requests.post(
-                url, headers=_entetes(mode), timeout=60,
-                data={"payload_json": json.dumps(charge)},
-                files={"files[0]": (chemin.name, f, "image/png")})
-    except (requests.RequestException, OSError) as e:
-        print(f"[!] envoi du fichier echoue ({canal}) : {e}", flush=True)
+    r = _requete_fichier("POST", url, _entetes(mode),
+                         _charge_image(chemin, titre, corps, couleur, pied, ping),
+                         chemin)
+    if r is None:
         return False
     if r.status_code >= 400:
-        print(f"[!] Discord HTTP {r.status_code} sur '{canal}' (fichier) : "
+        print(f"[!] Discord HTTP {r.status_code} sur '{canal}' (image) : "
               f"{r.text[:200]}", flush=True)
         return False
+    return True
+
+
+# Ancien nom, garde pour ne rien casser dans un script personnel.
+envoyer_fichier = envoyer_image
+
+
+def epingler_image(cle, chemin, titre, corps="", couleur="cours", canal="edt",
+                   pied=None):
+    """Comme epingler(), mais le message porte une IMAGE reecrite sur place.
+
+    Discord remplace les pieces jointes d'un message modifie par celles qu'on
+    redeclare : il suffit donc de renvoyer le PNG a chaque fois pour que le
+    salon #edt contienne une seule image, toujours a jour, et ne notifie
+    jamais.
+
+    Si le message a ete supprime a la main, la reecriture echoue en 404 et on
+    en poste un neuf — supprimer le message doit suffire a le regenerer.
+    """
+    chemin = Path(chemin)
+    if not chemin.exists():
+        return False
+    mode, cible = destination(canal)
+    if mode == "bot" and not config.BOT_TOKEN:
+        return False
+    if mode == "webhook" and not cible:
+        return False
+
+    charge = _charge_image(chemin, titre, corps, couleur, pied, ping=False)
+    memoire = _lire_messages()
+    connu = memoire.get(cle) or {}
+
+    if connu.get("id") and str(connu.get("cible")) == str(cible):
+        r = _requete_fichier("PATCH", _url_message(mode, cible, connu["id"]),
+                             _entetes(mode), charge, chemin)
+        if r is not None and r.status_code < 400:
+            return True
+        if r is not None and r.status_code != 404:
+            print(f"[!] reecriture de '{cle}' impossible (HTTP {r.status_code}) : "
+                  f"{r.text[:160]}", flush=True)
+
+    url = (f"{API}/channels/{cible}/messages" if mode == "bot"
+           else cible + ("&" if "?" in cible else "?") + "wait=true")
+    r = _requete_fichier("POST", url, _entetes(mode), charge, chemin)
+    if r is None or r.status_code >= 400:
+        if r is not None:
+            print(f"[!] Discord HTTP {r.status_code} sur '{canal}' (image "
+                  f"epinglee) : {r.text[:200]}", flush=True)
+        return False
+    try:
+        message = r.json()
+    except ValueError:
+        return False
+    memoire[cle] = {"id": str(message.get("id")), "cible": str(cible),
+                    "canal": canal,
+                    "le": datetime.now().isoformat(timespec="seconds")}
+    _ecrire_messages(memoire)
+    if mode == "bot" and config.BOT_TOKEN:
+        _requete("PUT", f"{API}/channels/{cible}/pins/{message['id']}",
+                 _entetes("bot"))
     return True
 
 

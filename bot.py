@@ -8,8 +8,10 @@ C'est le fichier a lancer au quotidien. Un seul processus fait les deux choses :
                 et envoie briefings, alertes et tableaux dans leurs salons ;
   * il ECOUTE : les commandes slash repondent la ou tu les tapes.
 
-    /edt [aujourdhui|demain|semaine|lundi...]   ton emploi du temps, en texte
-    /photo [jusqu_au]   ton emploi du temps en image, jusqu'a la date voulue
+    /edt [quand]        ton emploi du temps EN PHOTO : aujourd'hui, demain,
+                        « 12/10 », « lundi », « la semaine », « +14 »...
+    /photo [du] [au]    une periode entiere en photo
+    /actu [jours]       ce qui a bouge dans l'emploi du temps, en photo
     /prochain           le prochain cours et dans combien de temps
     /devoirs            ce qu'il reste a faire, avec un bouton « fait »
     /devoir             ouvre un formulaire pour en ajouter un
@@ -34,12 +36,14 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import sys
 import threading
 import time
 import traceback
 import warnings
 from datetime import date, datetime, timedelta
+from uuid import uuid4
 
 # discord.py 2.7 deprecie TextInput(label=...) au profit de discord.ui.Label,
 # qui n'existe pas avant 2.7. On garde la forme compatible avec les deux, et on
@@ -51,9 +55,11 @@ warnings.filterwarnings("ignore", message="label is deprecated",
 import discord
 from discord import app_commands
 
+import actu
 import assistant
 import celcat
 import config
+import changements as chg
 import devoirs as dv
 import image as img
 import notif
@@ -67,12 +73,64 @@ AVEC_DAEMON = True
 # L'heure de demarrage, affichee dans /statut et dans le panneau.
 DEMARRAGE = datetime.now()
 
-JOURS_CHOIX = [
-    app_commands.Choice(name="aujourd'hui", value="aujourdhui"),
-    app_commands.Choice(name="demain", value="demain"),
-    app_commands.Choice(name="cette semaine", value="semaine"),
-    app_commands.Choice(name="la semaine prochaine", value="semaine_prochaine"),
-] + [app_commands.Choice(name=j, value=j) for j in vue.JOURS]
+AFFICHAGE_CHOIX = [
+    app_commands.Choice(name="photo", value="photo"),
+    app_commands.Choice(name="texte", value="texte"),
+]
+
+# Ce que /edt propose pendant la frappe. Ce ne sont QUE des suggestions : le
+# champ reste libre, donc « 12/10 » ou « +21 » marchent sans figurer ici.
+SUGGESTIONS = [
+    ("aujourd'hui", ""),
+    ("demain", "demain"),
+    ("après-demain", "apres-demain"),
+    ("cette semaine", "semaine"),
+    ("la semaine prochaine", "semaine prochaine"),
+    ("les 7 prochains jours", "+7"),
+    ("les 14 prochains jours", "+14"),
+    ("le mois qui vient", "+28"),
+] + [(j, j) for j in vue.JOURS]
+
+RE_JOURS = re.compile(r"^\+?(\d{1,3})\s*j?$")
+
+
+def periode(texte, cours=None):
+    """« quand » -> (debut, fin, mode). Leve ValueError si c'est incomprehensible.
+
+    mode vaut "jour" (une journee en detail) ou "grille" (plusieurs jours, les
+    jours a la verticale). Une date seule donne une journee : demander
+    « /edt 12/10 », c'est vouloir voir le 12 octobre, pas trois semaines
+    autour.
+    """
+    brut = celcat.normaliser(texte)
+    auj = date.today()
+
+    if not brut or brut in ("aujourd'hui", "aujourdhui", "auj", "ce jour", "today"):
+        return auj, auj, "jour"
+    if brut in ("demain", "dem"):
+        return auj + timedelta(days=1), auj + timedelta(days=1), "jour"
+    if brut in ("apres-demain", "apres demain", "surlendemain"):
+        return auj + timedelta(days=2), auj + timedelta(days=2), "jour"
+    if brut in ("hier",):
+        return auj - timedelta(days=1), auj - timedelta(days=1), "jour"
+
+    if "semaine prochaine" in brut or brut in ("prochaine semaine", "semaine+1", "s+1"):
+        lundi = celcat.semaine_de(auj) + timedelta(days=7)
+        return lundi, lundi + timedelta(days=6), "grille"
+    if brut.startswith("semaine") or brut in ("cette semaine", "la semaine",
+                                              "semaine en cours", "s"):
+        lundi = celcat.semaine_de(auj)
+        return lundi, lundi + timedelta(days=6), "grille"
+    if brut in ("mois", "ce mois", "le mois", "mois prochain"):
+        return auj, auj + timedelta(days=27), "grille"
+
+    m = RE_JOURS.match(brut)
+    if m:
+        jours = int(m.group(1))
+        return auj, auj + timedelta(days=jours), ("jour" if jours == 0 else "grille")
+
+    jour = vue.lire_date(texte, cours or [], auj)
+    return jour, jour, "jour"
 
 
 def _embed(titre, corps, couleur="info", pied=None):
@@ -168,25 +226,6 @@ bot = Assistant()
 # Chaque fonction rend (titre, lignes, couleur) : les commandes slash et les
 # boutons du panneau appellent exactement le meme code, donc les deux ne
 # peuvent pas diverger.
-async def reponse_edt(quand="aujourdhui"):
-    cours, liste_devoirs = await _donnees()
-
-    if quand in ("semaine", "semaine_prochaine"):
-        lundi = celcat.semaine_de(date.today())
-        if quand == "semaine_prochaine":
-            lundi += timedelta(days=7)
-        return f"Semaine du {lundi:%d/%m}", vue.bloc_semaine(cours, lundi), "cours"
-
-    jour = date.today()
-    if quand == "demain":
-        jour += timedelta(days=1)
-    elif quand in vue.JOURS:
-        jour += timedelta(days=(vue.JOURS.index(quand) - jour.weekday()) % 7)
-    corps = vue.bloc_journee(cours, liste_devoirs, jour,
-                             avec_reveil=jour != date.today())
-    return vue.jour_relatif(jour).capitalize(), corps, "cours"
-
-
 async def reponse_prochain():
     cours, liste_devoirs = await _donnees()
     return "Prochain cours", vue.bloc_prochain(cours, liste_devoirs), "cours"
@@ -198,70 +237,206 @@ async def reponse_libre(jours=7):
             vue.creneaux_libres(cours, jours=max(1, min(jours, 31))), "calme")
 
 
-# --- /edt --------------------------------------------------------------------
-@bot.tree.command(name="edt", description="Ton emploi du temps, en texte")
-@app_commands.describe(quand="aujourd'hui par defaut")
-@app_commands.choices(quand=JOURS_CHOIX)
-async def cmd_edt(inter: discord.Interaction, quand: str = "aujourdhui"):
-    await inter.response.defer()
-    titre, corps, couleur = await reponse_edt(quand)
-    await inter.followup.send(embed=_embed(titre, corps, couleur))
+# --- Le rendu en image, partage par toutes les commandes ---------------------
+async def _rendu(fabrique, nom="emploi-du-temps.png"):
+    """(discord.File, "") ou (None, message d'erreur).
 
-
-# --- /photo : l'emploi du temps en image -------------------------------------
-async def _fabriquer_image(jusqu_au="", a_partir_de=""):
-    """(fichier Discord, note) ou (None, message d'erreur).
-
-    Tout le dessin se fait dans un fil : Pillow prend une seconde sur trois
+    Tout le dessin part dans un fil : Pillow prend une seconde sur trois
     semaines, et une seconde de boucle asyncio bloquee, c'est un bot qui ne
-    repond plus a personne."""
-    cours, _ = await _donnees()
+    repond plus a personne.
+
+    Chaque rendu ecrit dans son propre fichier temporaire : deux personnes qui
+    tapent /edt en meme temps ne doivent pas se voler leur image.
+    """
+    if not config.IMAGES:
+        return None, "les images sont desactivees dans config.yaml (affichage.images)"
 
     def travail():
-        debut = vue.lire_date(a_partir_de, cours, date.today())
-        fin = vue.lire_date(jusqu_au, cours, debut + timedelta(days=6))
-        if fin < debut:
-            debut, fin = fin, debut
-        # rendre() coupe deja a six semaines ; on le dit ici pour que
-        # l'utilisateur ne croie pas a un bug.
-        tronque = (fin - debut).days > 41
-        chemin = img.rendre(cours, debut, fin)
-        with open(chemin, "rb") as f:
-            octets = io.BytesIO(f.read())
-        note = f"Du {vue.jour_fr(debut)} au {vue.jour_fr(min(fin, debut + timedelta(days=41)))}."
-        if tronque:
-            note += " (limite a six semaines)"
-        return octets, note
+        chemin = config.DONNEES / f".rendu-{uuid4().hex[:8]}.png"
+        try:
+            fabrique(chemin)
+            return io.BytesIO(chemin.read_bytes())
+        finally:
+            chemin.unlink(missing_ok=True)
 
     try:
-        octets, note = await asyncio.to_thread(travail)
+        octets = await asyncio.to_thread(travail)
     except img.PillowManquant as e:
         return None, str(e)
+    except OSError as e:
+        return None, f"impossible d'ecrire l'image : {e}"
+    return discord.File(octets, filename=nom), ""
+
+
+# --- /edt : l'emploi du temps, en photo --------------------------------------
+async def _envoyer_edt(inter, quand="", affichage="photo", ephemere=False):
+    cours, liste_devoirs = await _donnees()
+    try:
+        debut, fin, mode = periode(quand, cours)
     except ValueError as e:
-        return None, f"Date incomprise : {e}"
-    return discord.File(octets, filename="emploi-du-temps.png"), note
-
-
-@bot.tree.command(name="photo", description="Ton emploi du temps en image")
-@app_commands.describe(
-    jusqu_au="jusqu'a quand : 12/10 · dans 3 semaines (+21) · vendredi · demain",
-    a_partir_de="a partir de quand (aujourd'hui par defaut)")
-async def cmd_photo(inter: discord.Interaction, jusqu_au: str = "",
-                    a_partir_de: str = ""):
-    await inter.response.defer()
-    fichier, note = await _fabriquer_image(jusqu_au, a_partir_de)
-    if fichier is None:
-        await inter.followup.send(f"❌ {note}", ephemeral=True)
+        await inter.followup.send(
+            f"❌ {e}\nEssaie `12/10`, `lundi`, `demain`, `la semaine`, `+14`.",
+            ephemeral=True)
         return
-    await inter.followup.send(content=f"🗓️ {note}", file=fichier)
+
+    # Sans Pillow, ou images desactivees : on repond quand meme, en texte.
+    if affichage == "texte" or not img.DISPONIBLE or not config.IMAGES:
+        titre, corps, couleur = await reponse_edt_texte(debut, fin, mode)
+        await inter.followup.send(embed=_embed(titre, corps, couleur),
+                                  ephemeral=ephemere)
+        return
+
+    if mode == "jour":
+        fichier, souci = await _rendu(
+            lambda chemin: img.rendre_jour(cours, liste_devoirs, debut, chemin),
+            nom=f"{debut:%Y-%m-%d}.png")
+        note = vue.jour_relatif(debut).capitalize()
+    else:
+        fichier, souci = await _rendu(
+            lambda chemin: img.rendre(cours, debut, fin, chemin))
+        note = f"Du {vue.jour_fr(debut)} au {vue.jour_fr(fin)}"
+    if fichier is None:
+        await inter.followup.send(f"❌ {souci}", ephemeral=True)
+        return
+    await inter.followup.send(content=f"🗓️ **{note}**", file=fichier,
+                              ephemeral=ephemere)
+
+
+async def reponse_edt_texte(debut, fin, mode):
+    """La meme chose en texte, pour `affichage:texte` et sans Pillow."""
+    cours, liste_devoirs = await _donnees()
+    if mode == "grille":
+        if fin - debut <= timedelta(days=7):
+            return (f"Semaine du {celcat.semaine_de(debut):%d/%m}",
+                    vue.bloc_semaine(cours, celcat.semaine_de(debut)), "cours")
+        lignes = []
+        lundi = celcat.semaine_de(debut)
+        while lundi <= fin:
+            lignes += [f"**Semaine du {lundi:%d/%m}**"] + \
+                      vue.bloc_semaine(cours, lundi, detail=False) + [""]
+            lundi += timedelta(days=7)
+        return (f"Du {vue.jour_fr(debut, court=True)} au "
+                f"{vue.jour_fr(fin, court=True)}", lignes, "cours")
+    corps = vue.bloc_journee(cours, liste_devoirs, debut,
+                             avec_reveil=debut != date.today())
+    return vue.jour_relatif(debut).capitalize(), corps, "cours"
+
+
+@bot.tree.command(name="edt", description="Ton emploi du temps en photo")
+@app_commands.describe(
+    quand="une date (12/10), un jour (lundi), demain, la semaine, +14… "
+          "— aujourd'hui par defaut",
+    affichage="photo par defaut ; texte si tu preferes copier-coller")
+@app_commands.choices(affichage=AFFICHAGE_CHOIX)
+async def cmd_edt(inter: discord.Interaction, quand: str = "",
+                  affichage: str = "photo"):
+    await inter.response.defer()
+    await _envoyer_edt(inter, quand, affichage)
+
+
+@cmd_edt.autocomplete("quand")
+async def auto_quand(inter: discord.Interaction, saisie: str):
+    """Des suggestions, sans jamais fermer la porte : ce que tu tapes reste
+    valable meme s'il ne figure pas dans la liste."""
+    bas = celcat.normaliser(saisie)
+    sortie = []
+    if saisie.strip():
+        try:
+            debut, fin, mode = periode(saisie)
+            libelle = (vue.jour_fr(debut) if mode == "jour" else
+                       f"du {vue.jour_fr(debut, court=True)} au "
+                       f"{vue.jour_fr(fin, court=True)}")
+            sortie.append(app_commands.Choice(name=f"➜ {libelle}",
+                                              value=saisie.strip()[:100]))
+        except ValueError:
+            pass
+    for nom, valeur in SUGGESTIONS:
+        if len(sortie) >= 25:
+            break
+        if not bas or bas in celcat.normaliser(nom) or bas in celcat.normaliser(valeur):
+            sortie.append(app_commands.Choice(name=nom, value=valeur or "aujourd'hui"))
+    return sortie[:25]
+
+
+# --- /photo : une periode entiere --------------------------------------------
+@bot.tree.command(name="photo",
+                  description="Une periode entiere en photo (les jours a la verticale)")
+@app_commands.describe(
+    du="a partir de quand (aujourd'hui par defaut)",
+    au="jusqu'a quand : 12/10 · +21 · vendredi (dans 6 jours par defaut)")
+async def cmd_photo(inter: discord.Interaction, du: str = "", au: str = ""):
+    await inter.response.defer()
+    cours, _ = await _donnees()
+    try:
+        debut = vue.lire_date(du, cours, date.today())
+        fin = vue.lire_date(au, cours, debut + timedelta(days=6))
+    except ValueError as e:
+        await inter.followup.send(f"❌ Date incomprise : {e}", ephemeral=True)
+        return
+    if fin < debut:
+        debut, fin = fin, debut
+    tronque = (fin - debut).days > 41
+
+    fichier, souci = await _rendu(lambda chemin: img.rendre(cours, debut, fin, chemin))
+    if fichier is None:
+        await inter.followup.send(f"❌ {souci}", ephemeral=True)
+        return
+    note = (f"Du {vue.jour_fr(debut)} au "
+            f"{vue.jour_fr(min(fin, debut + timedelta(days=41)))}")
+    if tronque:
+        note += " _(limité à six semaines)_"
+    await inter.followup.send(content=f"🗓️ **{note}**", file=fichier)
+
+
+# --- /actu : ce qui a bouge --------------------------------------------------
+@bot.tree.command(name="actu",
+                  description="Ce qui a change dans ton emploi du temps")
+@app_commands.describe(jours="sur combien de jours regarder en arriere (7 par defaut)")
+async def cmd_actu(inter: discord.Interaction, jours: int = 7):
+    await inter.response.defer()
+    jours = max(1, min(jours, actu.RETENTION_JOURS))
+    liste = await asyncio.to_thread(actu.historique, jours)
+    if not liste:
+        dernier = await asyncio.to_thread(actu.quand_dernier)
+        depuis = (f" Le dernier remonte au {dernier:%d/%m à %H:%M}."
+                  if dernier else "")
+        await inter.followup.send(
+            embed=_embed("Rien n'a bougé",
+                         [f"Aucun changement d'emploi du temps depuis "
+                          f"{jours} jours.{depuis}"], "calme"))
+        return
+
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_changements(
+            liste, chemin, titre="Ce qui a changé",
+            sous_titre=f"sur les {jours} derniers jours"),
+        nom="changements.png")
+    if fichier is None:
+        lignes, _ = await asyncio.to_thread(chg.bloc, liste)
+        await inter.followup.send(embed=_embed(chg.titre(liste), lignes,
+                                               chg.couleur(liste)))
+        return
+    await inter.followup.send(file=fichier)
 
 
 # --- /prochain ---------------------------------------------------------------
+async def _envoyer_prochain(inter, ephemere=False):
+    cours, liste_devoirs = await _donnees()
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_prochain(cours, liste_devoirs, chemin),
+        nom="prochain.png")
+    if fichier is None:
+        titre, corps, couleur = await reponse_prochain()
+        await inter.followup.send(embed=_embed(titre, corps, couleur),
+                                  ephemeral=ephemere)
+        return
+    await inter.followup.send(file=fichier, ephemeral=ephemere)
+
+
 @bot.tree.command(name="prochain", description="Le prochain cours, et dans combien de temps")
 async def cmd_prochain(inter: discord.Interaction):
     await inter.response.defer()
-    titre, corps, couleur = await reponse_prochain()
-    await inter.followup.send(embed=_embed(titre, corps, couleur))
+    await _envoyer_prochain(inter)
 
 
 # --- /devoirs, avec un bouton par devoir -------------------------------------
@@ -278,12 +453,20 @@ class BoutonFait(discord.ui.Button):
             await inter.response.send_message(
                 f"Le devoir #{self.devoir_id} n'existe plus.", ephemeral=True)
             return
-        # On reconstruit la liste : le devoir raye disparait, son bouton aussi.
+        # On redessine la liste : le devoir raye disparait, son bouton aussi.
+        await inter.response.defer()
         liste = await asyncio.to_thread(dv.lire)
         restants = dv.actifs(liste)
-        await inter.response.edit_message(
-            embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"),
-            view=VueDevoirs(restants) if restants else None)
+        fichier, _ = await _rendu(
+            lambda chemin: img.rendre_devoirs(liste, chemin), nom="devoirs.png")
+        vue_boutons = VueDevoirs(restants) if restants else None
+        if fichier is None:
+            await inter.edit_original_response(
+                embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"),
+                view=vue_boutons)
+            return
+        await inter.edit_original_response(content="📚 **Devoirs**", embed=None,
+                                           attachments=[fichier], view=vue_boutons)
 
 
 class VueDevoirs(discord.ui.View):
@@ -297,14 +480,25 @@ class VueDevoirs(discord.ui.View):
             self.add_item(BoutonFait(d))
 
 
+async def _envoyer_devoirs(inter, ephemere=False):
+    liste = await asyncio.to_thread(dv.lire)
+    restants = dv.actifs(liste)
+    vue_boutons = VueDevoirs(restants) if restants else None
+    fichier, _ = await _rendu(lambda chemin: img.rendre_devoirs(liste, chemin),
+                              nom="devoirs.png")
+    if fichier is None:
+        await inter.followup.send(
+            embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"),
+            view=vue_boutons, ephemeral=ephemere)
+        return
+    await inter.followup.send(content="📚 **Devoirs**", file=fichier,
+                              view=vue_boutons, ephemeral=ephemere)
+
+
 @bot.tree.command(name="devoirs", description="Ce qu'il te reste a faire")
 async def cmd_devoirs(inter: discord.Interaction):
     await inter.response.defer()
-    liste = await asyncio.to_thread(dv.lire)
-    restants = dv.actifs(liste)
-    await inter.followup.send(
-        embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"),
-        view=VueDevoirs(restants) if restants else None)
+    await _envoyer_devoirs(inter)
 
 
 # --- /devoir : un formulaire -------------------------------------------------
@@ -348,9 +542,8 @@ async def cmd_fait(inter: discord.Interaction, numero: int):
         await inter.response.send_message(f"❌ aucun devoir #{numero}.",
                                           ephemeral=True)
         return
-    liste = await asyncio.to_thread(dv.lire)
-    await inter.response.send_message(
-        embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"))
+    await inter.response.defer()
+    await _envoyer_devoirs(inter)
 
 
 # --- /libre ------------------------------------------------------------------
@@ -430,71 +623,87 @@ async def cmd_ics(inter: discord.Interaction):
 
 # --- Le panneau de boutons, epingle dans #commandes --------------------------
 class VuePanneau(discord.ui.View):
-    """Les memes reponses que les commandes slash, en un clic.
+    """Les memes reponses que les commandes slash, en un clic — et en photo.
 
     timeout=None et des custom_id fixes : le panneau reste vivant apres un
-    redemarrage du bot, sans qu'on ait a le reposter."""
+    redemarrage du bot, sans qu'on ait a le reposter.
+    """
 
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def _repondre(self, inter, fabrique):
+    async def _texte(self, inter, fabrique):
         # Ephemere : le panneau est epingle et tout le monde clique dessus,
         # inutile de remplir le salon d'une reponse par clic.
         await inter.response.defer(ephemeral=True)
         titre, corps, couleur = await fabrique()
-        await inter.followup.send(embed=_embed(titre, corps, couleur),
-                                  ephemeral=True)
+        await inter.followup.send(embed=_embed(titre, corps, couleur), ephemeral=True)
+
+    async def _photo(self, inter, quand):
+        await inter.response.defer(ephemeral=True)
+        await _envoyer_edt(inter, quand, "photo", ephemere=True)
 
     @discord.ui.button(label="Aujourd'hui", emoji="📆",
                        style=discord.ButtonStyle.primary, custom_id="pan:auj")
     async def b_auj(self, inter: discord.Interaction, _b):
-        await self._repondre(inter, lambda: reponse_edt("aujourdhui"))
+        await self._photo(inter, "")
 
     @discord.ui.button(label="Demain", emoji="🌙",
                        style=discord.ButtonStyle.secondary, custom_id="pan:demain")
     async def b_demain(self, inter: discord.Interaction, _b):
-        await self._repondre(inter, lambda: reponse_edt("demain"))
+        await self._photo(inter, "demain")
 
     @discord.ui.button(label="La semaine", emoji="🗓️",
                        style=discord.ButtonStyle.secondary, custom_id="pan:semaine")
     async def b_semaine(self, inter: discord.Interaction, _b):
-        await self._repondre(inter, lambda: reponse_edt("semaine"))
+        await self._photo(inter, "semaine")
+
+    @discord.ui.button(label="Trois semaines", emoji="📸",
+                       style=discord.ButtonStyle.secondary, custom_id="pan:photo")
+    async def b_photo(self, inter: discord.Interaction, _b):
+        await self._photo(inter, "+20")
 
     @discord.ui.button(label="Prochain cours", emoji="⏭️",
-                       style=discord.ButtonStyle.success, custom_id="pan:prochain")
+                       style=discord.ButtonStyle.success, custom_id="pan:prochain", row=1)
     async def b_prochain(self, inter: discord.Interaction, _b):
-        await self._repondre(inter, reponse_prochain)
-
-    @discord.ui.button(label="Photo de la semaine", emoji="📸",
-                       style=discord.ButtonStyle.primary, custom_id="pan:photo", row=1)
-    async def b_photo(self, inter: discord.Interaction, _b):
         await inter.response.defer(ephemeral=True)
-        fichier, note = await _fabriquer_image("+6")
-        if fichier is None:
-            await inter.followup.send(f"❌ {note}", ephemeral=True)
+        await _envoyer_prochain(inter, ephemere=True)
+
+    @discord.ui.button(label="Ce qui a changé", emoji="🔔",
+                       style=discord.ButtonStyle.primary, custom_id="pan:actu", row=1)
+    async def b_actu(self, inter: discord.Interaction, _b):
+        await inter.response.defer(ephemeral=True)
+        liste = await asyncio.to_thread(actu.historique, 7)
+        if not liste:
+            await inter.followup.send("Rien n'a bougé ces 7 derniers jours. 👌",
+                                      ephemeral=True)
             return
-        await inter.followup.send(content=f"🗓️ {note}", file=fichier, ephemeral=True)
+        fichier, souci = await _rendu(
+            lambda chemin: img.rendre_changements(
+                liste, chemin, titre="Ce qui a changé",
+                sous_titre="sur les 7 derniers jours"), nom="changements.png")
+        if fichier is None:
+            lignes, _u = chg.bloc(liste)
+            await inter.followup.send(embed=_embed(chg.titre(liste), lignes,
+                                                   chg.couleur(liste)), ephemeral=True)
+            return
+        await inter.followup.send(file=fichier, ephemeral=True)
 
     @discord.ui.button(label="Devoirs", emoji="📚",
                        style=discord.ButtonStyle.secondary, custom_id="pan:devoirs", row=1)
     async def b_devoirs(self, inter: discord.Interaction, _b):
         await inter.response.defer(ephemeral=True)
-        liste = await asyncio.to_thread(dv.lire)
-        restants = dv.actifs(liste)
-        await inter.followup.send(
-            embed=_embed("Devoirs", vue.bloc_devoirs(liste), "devoir"),
-            view=VueDevoirs(restants) if restants else None, ephemeral=True)
+        await _envoyer_devoirs(inter, ephemere=True)
 
     @discord.ui.button(label="Ajouter un devoir", emoji="➕",
-                       style=discord.ButtonStyle.success, custom_id="pan:ajout", row=1)
+                       style=discord.ButtonStyle.success, custom_id="pan:ajout", row=2)
     async def b_ajout(self, inter: discord.Interaction, _b):
         await inter.response.send_modal(ModaleDevoir())
 
     @discord.ui.button(label="Creneaux libres", emoji="🫧",
                        style=discord.ButtonStyle.secondary, custom_id="pan:libre", row=2)
     async def b_libre(self, inter: discord.Interaction, _b):
-        await self._repondre(inter, lambda: reponse_libre(7))
+        await self._texte(inter, lambda: reponse_libre(7))
 
     @discord.ui.button(label="Rafraichir", emoji="🔄",
                        style=discord.ButtonStyle.secondary, custom_id="pan:refresh", row=2)
@@ -545,11 +754,15 @@ def texte_aide():
     jour_recap = vue.JOURS[config.RECAP_SEMAINE_JOUR % 7]
 
     lignes = [
-        "**Voir**",
-        "`/edt` — ton emploi du temps en texte : aujourd'hui, demain, la "
-        "semaine, ou un jour precis",
-        "`/photo jusqu_au:12/10` — **l'emploi du temps en image**, jusqu'a la "
-        "date que tu veux",
+        "**Voir — tout sort en photo**",
+        "`/edt` — **ta journee en photo**. Avec une date : `/edt 12/10`, "
+        "`/edt lundi`, `/edt demain`",
+        "`/edt quand:la semaine` — la semaine entiere, **les jours a la "
+        "verticale**. Aussi : `+14`, `la semaine prochaine`",
+        "`/edt affichage:texte` — la meme chose en texte, si tu veux "
+        "copier-coller",
+        "`/photo du:12/10 au:31/10` — une periode precise, en photo",
+        "`/actu` — **ce qui a change** dans l'emploi du temps, en photo",
         "`/prochain` — le prochain cours, la salle, et dans combien de temps",
         "`/libre` — tes creneaux libres",
         "",
@@ -564,10 +777,11 @@ def texte_aide():
         "`/panneau` — epingler le panneau de boutons dans un salon",
         "`/ics` — le fichier a importer dans ton agenda",
         "",
-        "**Ecrire une date**  (pour `/photo` comme pour un devoir)",
+        "**Ecrire une date**  (pour `/edt` comme pour un devoir)",
         "`12/10` · `12/10/2026` · `2026-10-12`",
         "`demain` · `lundi` · `apres-demain`",
-        "`+21` — dans 21 jours",
+        "`+21` — les 21 prochains jours",
+        "`la semaine` · `la semaine prochaine`",
         "`prochain:vba` — ton prochain cours de VBA, avec son heure exacte",
         "",
         "**Ce qui arrive tout seul, sans rien taper**",
@@ -589,7 +803,8 @@ def texte_aide():
                       "devoirs a noter ? »")
     lignes += [
         f"`toutes les {config.VERIF_EDT_MINUTES} min` **#alertes** — cours "
-        f"deplace, annule, changement de salle",
+        f"deplace, annule, changement de salle, "
+        + ("**avec une mention**" if config.PING_CHANGEMENTS else "sans mention"),
         f"`toutes les {config.RAFRAICHIR_TABLEAUX_MINUTES} min` **#edt** et "
         f"**#statut** — les deux tableaux vivants, reecrits sur place (aucune "
         f"notification)",
