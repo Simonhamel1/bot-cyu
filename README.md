@@ -144,6 +144,28 @@ retombe sur `webhook_secours`.
 pip install -r requirements.txt
 ```
 
+**Sur un serveur Ubuntu 24 / Debian 12**, cette commande est refusée
+(`error: externally-managed-environment`) : depuis PEP 668, ces distributions
+interdisent à pip de toucher au Python du système. Deux façons de s'en sortir,
+au choix :
+
+```bash
+# 1. dans ton dossier personnel — c'est ce que fait installer.sh
+pip3 install --user --break-system-packages -r requirements.txt
+
+# 2. dans un environnement isolé, si tu préfères
+sudo apt install -y python3-venv
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# puis lance le bot avec .venv/bin/python bot.py, et remplace
+# /usr/bin/env python3 par le chemin du venv dans les fichiers .service
+```
+
+Le nom de `--break-system-packages` fait peur, mais avec `--user` tout part
+dans `~/.local` : les paquets système ne sont jamais touchés.
+
+Le plus simple sur un serveur reste de ne rien taper de tout ça et de lancer
+**`./installer.sh`**, qui s'en occupe.
+
 `requests`, `discord.py`, `PyYAML`, et `Pillow` pour les images. Sans Pillow,
 tout fonctionne, mais tout sort en texte. Sur un serveur nu, installe aussi une
 police, sinon les accents disparaissent des images :

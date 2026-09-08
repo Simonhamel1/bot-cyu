@@ -111,19 +111,19 @@ import requests, discord, yaml
 print(f'   requests OK, discord.py {discord.__version__}, PyYAML {yaml.__version__}')
 try:
     import PIL
-    print(f'   Pillow {PIL.__version__} : /photo disponible')
+    print(f'   Pillow {PIL.__version__} : les reponses en photo sont disponibles')
 except ImportError:
-    print('   [!] Pillow absent : tout marche sauf /photo')
+    print('   [!] Pillow absent : tout marche, mais tout sortira en texte')
 "
 
-# Sans police TTF systeme, Pillow retombe sur sa bitmap de secours : /photo
-# rend alors une image laide et sans accents. Un paquet de 3 Mo suffit.
+# Sans police TTF systeme, Pillow retombe sur sa bitmap de secours : les
+# images sortent alors laides et sans accents. Un paquet de 3 Mo suffit.
 # ls renvoie une erreur des qu'UN chemin manque : on compte les lignes plutot
 # que de tester son code de sortie, sinon on avertirait a tort.
 if ! ls /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
         /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf \
         /usr/share/fonts/TTF/DejaVuSans.ttf 2>/dev/null | grep -q .; then
-    echo "   [!] aucune police TTF systeme : /photo rendra une image sans accents."
+    echo "   [!] aucune police TTF systeme : les images sortiront sans accents."
     echo "       sudo apt install -y fonts-dejavu-core"
 fi
 
