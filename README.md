@@ -110,7 +110,12 @@ pip install -r requirements.txt
 ```
 
 `requests`, `discord.py`, `PyYAML`, et `Pillow` pour les images. Sans Pillow,
-tout fonctionne sauf `/photo`.
+tout fonctionne sauf `/photo`. Sur un serveur nu, ajoute aussi une police pour
+que l'image sorte avec ses accents :
+
+```bash
+sudo apt install -y fonts-dejavu-core
+```
 
 ### 2. Le bot Discord
 
@@ -235,13 +240,80 @@ Shibboleth, **et** la présence du formulaire de connexion.
 
 ## Déployer sur un serveur
 
+Deux chemins, au choix. Les deux aboutissent au même service systemd.
+
+### A. Par `git pull` (recommandé)
+
+Le dépôt vit sur GitHub, le serveur le tire. **`config.yaml` ne passe jamais par
+git** — il contient le jeton du bot et ton mot de passe CYU, il est dans
+`.gitignore`. Tu le déposes une seule fois, à la main.
+
+Sur le serveur, la première fois :
+
+```bash
+git clone https://github.com/<toi>/<depot>.git ~/bot-cyu
+```
+
+Depuis ta machine, envoie la config (une seule fois) :
+
+```bash
+scp config.yaml utilisateur@ip_du_serveur:~/bot-cyu/config.yaml
+```
+
+Puis, sur le serveur :
+
+```bash
+cd ~/bot-cyu && ./installer.sh
+```
+
+Et à chaque mise à jour, ensuite :
+
+```bash
+cd ~/bot-cyu && git pull && ./installer.sh
+```
+
+`installer.sh` vérifie que la config est remplie, installe les dépendances,
+contrôle le fuseau horaire, pose le service systemd et redémarre le bot. Il est
+idempotent : le relancer ne crée pas de doublon et ne touche **ni** à
+`config.yaml` **ni** à `donnees/`.
+
+```bash
+./installer.sh --avec-uptime      # ajoute la surveillance du webmail
+./installer.sh --sans-uptime      # la retire
+./installer.sh --sans-demarrer    # tout préparer sans lancer le service
+./installer.sh --help
+```
+
+### B. Par `deployer.sh` (depuis ta machine, sans GitHub)
+
 ```bash
 ./deployer.sh utilisateur@ip_du_serveur
 ```
 
-Copie le projet en SSH, installe les dépendances, met en place un service
-systemd utilisateur qui redémarre tout seul, et affiche les logs. Relancer le
-script met à jour le code sans écraser le cache ni le carnet de devoirs.
+Copie le projet en SSH (rsync, `config.yaml` compris), installe les dépendances,
+met en place le service systemd et affiche les logs. Relancer le script met à
+jour le code sans écraser le cache ni le carnet de devoirs.
+
+### Le fuseau horaire du serveur
+
+Les horaires de `config.yaml` (`briefing_matin: "07:00"`, `silence_de`, …) sont
+lus en **heure locale du serveur**, sans conversion. Un VPS livré en UTC
+enverrait donc le briefing de 7 h à 9 h heure de Paris. À régler une fois :
+
+```bash
+sudo timedatectl set-timezone Europe/Paris
+systemctl --user restart assistant-cyu
+```
+
+`installer.sh` le vérifie et te prévient si ce n'est pas fait.
+
+### Piloter le service
+
+```bash
+journalctl --user -u assistant-cyu -f      # les logs en direct
+systemctl --user restart assistant-cyu
+systemctl --user stop assistant-cyu
+```
 
 > Ne fais pas tourner le bot ici **et** là-bas en même temps : tu recevrais
 > chaque briefing en double.
@@ -265,6 +337,11 @@ script met à jour le code sans écraser le cache ni le carnet de devoirs.
 | `assistant.py` | le daemon et la ligne de commande |
 | `bot.py` | le bot Discord : commandes slash, panneau de boutons |
 | `uptime.py` | la surveillance du webmail |
+| `installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
+| `deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
+| `assistant-cyu.service` | l'unité systemd du bot |
+| `uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
+| `requirements.txt` | les dépendances Python |
 | `donnees/` | cache, devoirs, état — local, jamais sur GitHub |
 
 ---

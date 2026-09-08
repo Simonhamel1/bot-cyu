@@ -84,9 +84,10 @@ cd "$HOME/$DOSSIER"
 # Ubuntu 24 refuse pip hors environnement isole (PEP 668).
 # --break-system-packages avec --user installe dans ~/.local, jamais dans les
 # paquets systeme : le nom fait peur, rien n'est casse.
-DEPS='requests discord.py>=2.3 PyYAML>=6.0 Pillow>=10.0'
-pip3 install --user --break-system-packages --quiet $DEPS \
-    || pip3 install --user --quiet $DEPS
+# On lit requirements.txt plutot qu'une liste en dur : une seule source de
+# verite, elle ne peut pas diverger de celle de installer.sh.
+pip3 install --user --break-system-packages --quiet -r requirements.txt \
+    || pip3 install --user --quiet -r requirements.txt
 python3 -c "
 import requests, discord, yaml
 print(f'   requests OK, discord.py {discord.__version__}, PyYAML {yaml.__version__}')

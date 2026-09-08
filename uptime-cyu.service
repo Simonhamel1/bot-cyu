@@ -1,0 +1,25 @@
+# Service systemd UTILISATEUR pour la surveillance du webmail (uptime.py).
+#
+# OPTIONNEL et INDEPENDANT du bot : uptime.py est un second processus. Sans
+# lui, le bot tourne normalement, seule la ligne « Webmail » du panneau
+# #statut reste vide.
+#
+# installer.sh l'installe si tu reponds oui, et reecrit le chemin tout seul.
+#
+# Logs :  journalctl --user -u uptime-cyu -f
+
+[Unit]
+Description=Surveillance du webmail CYU
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bot-cyu
+ExecStart=/usr/bin/env python3 %h/bot-cyu/uptime.py
+Restart=always
+RestartSec=60
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

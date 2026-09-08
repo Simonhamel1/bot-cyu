@@ -1,0 +1,32 @@
+# Service systemd UTILISATEUR pour le bot Discord (bot.py).
+#
+# Le chemin par defaut est %h/bot-cyu (%h = ton dossier personnel).
+# installer.sh reecrit ce chemin tout seul avec le vrai dossier du depot :
+# tu n'as normalement rien a modifier ici.
+#
+# Installation a la main :
+#   mkdir -p ~/.config/systemd/user
+#   cp assistant-cyu.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now assistant-cyu
+#   sudo loginctl enable-linger $USER      # sinon il s'arrete a la deconnexion
+#
+# Logs :  journalctl --user -u assistant-cyu -f
+
+[Unit]
+Description=Assistant CYU (emploi du temps + devoirs sur Discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bot-cyu
+ExecStart=/usr/bin/env python3 %h/bot-cyu/bot.py
+Restart=always
+RestartSec=30
+# Sans ca, les print() restent bloques dans un tampon et journalctl
+# n'affiche rien avant plusieurs minutes.
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
