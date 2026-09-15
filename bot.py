@@ -642,7 +642,8 @@ async def vue_stats(lundi):
          _b("Cette semaine", "stats", cette, style="bleu", inactif=lundi == cette),
          _b("▶", "stats", lundi + timedelta(days=7)),
          _b("La grille", "edt", "s", lundi, emoji="🗓️")],
-        [_b("Tout l'emploi du temps", "bilan", emoji="📚")],
+        [_b("Tout l'emploi du temps", "bilan", emoji="📚"),
+         _b("Comparer à la précédente", "comparer", lundi, emoji="⚖️")],
     ]
     titre = f"Ta semaine — {semaine_.libelle}"
 
@@ -692,6 +693,176 @@ async def vue_bilan():
         return carte(titre, stats.bloc_bilan(b), "info", boutons=boutons, pied=souci), []
     return carte(titre, [], "info", sous_titre=sous, image=fichier,
                  boutons=boutons, pied="tout ce que CELCAT connaît à ce jour"), [fichier]
+
+
+# --- Cette semaine contre la precedente --------------------------------------
+async def vue_comparer(lundi):
+    cours, liste_devoirs = await _donnees()
+    lundi = celcat.semaine_de(lundi)
+    avant_l = lundi - timedelta(days=7)
+    cette = await asyncio.to_thread(stats.cote_semaine, cours, lundi)
+    avant = await asyncio.to_thread(stats.cote_semaine, cours, avant_l)
+    dev_cette = stats.devoirs_de_la_semaine(liste_devoirs, lundi)
+    dev_avant = stats.devoirs_de_la_semaine(liste_devoirs, avant_l)
+    lignes = stats.bloc_comparaison(cette, avant, dev_cette, dev_avant)
+
+    ref = celcat.semaine_de(date.today())
+    titre = ("Cette semaine" if lundi == ref else f"Semaine du {lundi:%d/%m}") \
+        + " vs la précédente"
+    navigation = [
+        [_b("◀", "comparer", avant_l),
+         _b("Cette semaine", "comparer", ref, style="bleu", inactif=lundi == ref),
+         _b("▶", "comparer", lundi + timedelta(days=7)),
+         _b("Les stats", "stats", lundi, emoji="📊")],
+        [_b("Tout l'emploi du temps", "bilan", emoji="📚")],
+    ]
+    if cette.vide or avant.vide:
+        teinte = "calme"
+    else:
+        teinte = "devoir" if cette.minutes > avant.minutes else "cours"
+    return carte(titre, lignes, teinte,
+                 sous_titre=f"semaine du {lundi:%d/%m} contre celle du {avant_l:%d/%m}",
+                 boutons=navigation), []
+
+
+# --- Les examens : compte a rebours ------------------------------------------
+async def vue_examens():
+    cours, liste_devoirs = await _donnees()
+    liste = await asyncio.to_thread(stats.examens, cours, liste_devoirs)
+    boutons = [_b("Ajouter un examen", "dev", "ajout", "examen", style="vert", emoji="🎓"),
+               _b("Créneaux libres", "libre", 14, emoji="🫧"),
+               _b("Devoirs", "dev", "page", 0, emoji="📚"),
+               _b("Actualiser", "examens", emoji="🔄")]
+    if not liste:
+        return carte("Examens", ["Aucun examen connu.",
+                                 "-# CELCAT n'en annonce aucun et ton carnet n'en "
+                                 "contient pas. Ajoute-les avec le bouton : le "
+                                 "compte à rebours suit tout seul."],
+                     "calme", boutons=boutons), []
+
+    lignes = []
+    for e in liste[:12]:
+        j = e["jours"]
+        if j == 0:
+            quand, ico = "**AUJOURD'HUI**", "🔥"
+        elif j == 1:
+            quand, ico = "**DEMAIN**", "⚠️"
+        elif j <= 7:
+            quand, ico = f"**J-{j}**", "🟠"
+        else:
+            quand, ico = f"**J-{j}**", "📅"
+        titre = e["matiere"] or e["titre"]
+        detail = f"{vue.jour_fr(e['quand'].date(), court=True)} {e['quand']:%H:%M}"
+        if e["ou"]:
+            detail += f" · {e['ou']}"
+        if e["source"] == "devoir":
+            detail += " · de ton carnet"
+        lignes.append(f"{ico} {quand} — **{titre}**\n-# {detail}")
+    if len(liste) > 12:
+        lignes.append(f"-# … et {len(liste) - 12} autres")
+
+    premier = liste[0]
+    libre = await asyncio.to_thread(stats.minutes_libres, cours, premier["quand"])
+    lignes += ["", f"**D'ici le premier** ({vue.jour_relatif(premier['quand'].date())}) : "
+                   f"**{vue.duree_fr(libre)}** de créneaux libres en semaine pour "
+                   f"réviser, sans toucher aux week-ends."]
+    teinte = ("alerte" if premier["jours"] <= 1 else
+              "devoir" if premier["jours"] <= 7 else "info")
+    sous = (f"{len(liste)} à venir · le premier {vue.jour_relatif(premier['quand'].date())}")
+    return carte("Examens — compte à rebours", lignes, teinte, sous_titre=sous,
+                 boutons=boutons), []
+
+
+# --- Les paris de l'assistant ------------------------------------------------
+async def vue_prediction():
+    """Des pronostics, tires de vraies donnees, presentes comme des paris.
+
+    C'est de l'humour, mais chaque pari repose sur un chiffre reel : les
+    changements du mois, la journee la plus lourde, la probabilite de pluie,
+    l'echeance la plus proche. La « cote » est l'inverse de la probabilite.
+    """
+    cours, liste_devoirs = await _donnees()
+    auj = date.today()
+    cette = celcat.semaine_de(auj)
+    paris = []                       # (emoji, titre, texte, probabilite)
+
+    # Le cours qui va bouger : celui qui a le plus bouge ces 30 derniers jours.
+    historique = await asyncio.to_thread(actu.historique, 30)
+    compte = {}
+    for ch in historique:
+        c = ch.apres or ch.avant
+        if c is not None:
+            nom = stats.nom_matiere(c)
+            compte[nom] = compte.get(nom, 0) + 1
+    if compte:
+        nom, n = max(compte.items(), key=lambda kv: kv[1])
+        paris.append(("🔀", "Le cours qui va encore bouger",
+                      f"**{nom}** — déjà {n} changement{'s' if n > 1 else ''} en 30 jours",
+                      min(0.9, 0.3 + 0.15 * n)))
+    else:
+        paris.append(("🔀", "Le cours qui va bouger",
+                      "Rien n'a bougé depuis 30 jours : l'assistant parie sur une "
+                      "semaine calme", 0.15))
+
+    # Le jour ou tu vas craquer : le plus lourd de la semaine.
+    s = stats.semaine(cours, cette)
+    plein = s.jour_plein
+    if plein:
+        texte = f"**{vue.jour_fr(plein.jour)}** — {vue.duree_fr(plein.minutes)} de cours"
+        if plein.trous_minutes:
+            texte += f", {vue.duree_fr(plein.trous_minutes)} de trous"
+        paris.append(("🫠", "Le jour où tu vas craquer", texte, min(0.95, plein.minutes / 600)))
+
+    # Le parapluie : le jour le plus arrose des quatre a venir.
+    if config.METEO_ACTIVE:
+        def meteo_():
+            pire = None
+            for n in range(4):
+                j = meteo.jour(auj + timedelta(days=n))
+                if j and (pire is None or j.probabilite > pire[1].probabilite):
+                    pire = (auj + timedelta(days=n), j)
+            return pire
+        pire = await asyncio.to_thread(meteo_)
+        if pire:
+            jour_, j = pire
+            paris.append(("☔", "Le jour du parapluie",
+                          f"**{vue.jour_relatif(jour_).capitalize()}** — {j.texte}, "
+                          f"{j.probabilite} % de pluie", max(0.05, j.probabilite / 100)))
+
+    # Le devoir rendu a la derniere minute : le plus proche.
+    restants = dv.actifs(liste_devoirs)
+    if restants:
+        d = restants[0]
+        r = dv.jours_restants(d)
+        texte = f"**{d['titre']}**" + (f" · {d['matiere']}" if d.get("matiere") else "")
+        paris.append(("⏰", "Le devoir rendu à la dernière minute",
+                      f"{texte} — {_quand_devoir(d)[0]}",
+                      0.9 if (r is not None and r <= 1) else 0.6))
+
+    # Le trou qui finira en sieste : le plus long de la semaine.
+    trous = [(j, a, b) for j in s.jours for a, b in j.trous]
+    if trous:
+        j, a, b = max(trous, key=lambda t: t[2] - t[1])
+        minutes = (b - a).total_seconds() / 60
+        paris.append(("🛋️", "Le trou qui finira en sieste",
+                      f"**{vue.jour_fr(j.jour, court=True)} {a:%H:%M}–{b:%H:%M}** — "
+                      f"{vue.duree_fr(minutes)} à tuer", min(0.9, minutes / 240)))
+
+    lignes = []
+    for emoji, titre, texte, p in paris:
+        cote = max(1.05, 1 / max(p, 0.05))
+        lignes += [f"{emoji} **{titre}**", texte,
+                   f"-# cote {cote:.2f} · {p * 100:.0f} % de chances selon l'assistant", ""]
+    if not paris:
+        lignes = ["Pas assez de données pour parier. Reviens quand CELCAT aura parlé."]
+    boutons = [_b("Rejouer", "prediction", style="bleu", emoji="🎲"),
+               _b("Ce qui a changé", "actu", 7, emoji="🔔"),
+               _b("Météo", "meteo", 0, emoji="🌦️"),
+               _b("Les stats", "stats", cette, emoji="📊")]
+    return carte("Les paris de l'assistant", lignes, "info",
+                 sous_titre="des vrais chiffres, des fausses cotes",
+                 boutons=boutons,
+                 pied="l'assistant n'a jamais raison, mais il a des chiffres"), []
 
 
 # --- La meteo ----------------------------------------------------------------
@@ -816,7 +987,7 @@ def vue_panneau():
              "visibles que par toi, et chacune a ses propres boutons pour "
              "naviguer.",
              "-# Tu peux aussi taper les commandes : `/edt` `/devoirs` `/stats` "
-             "`/meteo` `/help`"]
+             "`/examens` `/meteo` — et `/help` pour tout voir"]
     menu = ui.Menu("jour", "Voir un jour de la semaine…",
                    [(j.capitalize(), str(i), None, "📆") for i, j in enumerate(vue.JOURS)]
                    + [("La semaine prochaine", "prochaine", None, "🗓️"),
@@ -832,9 +1003,11 @@ def vue_panneau():
          _b("Ma semaine en chiffres", "pan", "stats", emoji="📊"),
          _b("Météo", "pan", "meteo", emoji="🌦️"),
          _b("Créneaux libres", "pan", "libre", emoji="🫧")],
-        [_b("Relire CELCAT", "pan", "refresh", emoji="🔄"),
-         _b("État", "pan", "statut", emoji="🩺"),
-         _b("Aide", "pan", "help", emoji="❓")],
+        [_b("Examens", "pan", "examens", emoji="🎓"),
+         _b("Comparer", "pan", "comparer", emoji="⚖️"),
+         _b("Les paris", "pan", "prediction", emoji="🎲"),
+         _b("Relire CELCAT", "pan", "refresh", emoji="🔄"),
+         _b("État", "pan", "statut", emoji="🩺")],
     ]
     return carte("Assistant CYU", corps, "info", sous_titre="le panneau",
                  boutons=boutons, menus=[menu],
@@ -873,6 +1046,12 @@ def texte_aide():
         "**toutes les heures par matière**",
         "`/meteo` — le temps, et **s'il faut un parapluie** pour ton trajet",
         "`/libre` — tes créneaux libres",
+        "`/comparer` — **cette semaine contre la précédente** : heures, séances, "
+        "trous, devoirs, et ce qui bouge par matière",
+        "`/examens` — **compte à rebours** avant chaque examen, CELCAT et ton "
+        "carnet réunis, avec le temps libre pour réviser d'ici là",
+        "`/prediction` — les paris de l'assistant 🎲 (des vrais chiffres, des "
+        "fausses cotes)",
         "",
         "### Les devoirs",
         "`/devoirs` — la liste, **un bouton ✅ par devoir**, un menu pour supprimer",
@@ -960,6 +1139,15 @@ class ModaleDevoir(discord.ui.Modal, title="Nouveau devoir"):
         component=discord.ui.TextInput(style=discord.TextStyle.paragraph,
                                        required=False, max_length=400))
 
+    def __init__(self, type_defaut="devoir"):
+        super().__init__()
+        # Les composants sont copies par instance : on peut changer le choix
+        # par defaut sans toucher aux autres formulaires ouverts.
+        for option in self.type_.component.options:
+            option.default = option.value == type_defaut
+        if type_defaut == "examen":
+            self.title = "Nouvel examen"
+
     async def on_submit(self, inter: discord.Interaction):
         # Pas de defer : la reponse decide si elle est publique (le devoir est
         # ajoute, tout le monde peut le voir) ou privee (une erreur de saisie).
@@ -1003,7 +1191,7 @@ async def agir(inter, action, args, valeurs=()):
     valeurs = list(valeurs)
 
     if action == "dev" and args[:1] == ["ajout"]:
-        await inter.response.send_modal(ModaleDevoir())
+        await inter.response.send_modal(ModaleDevoir(args[1] if len(args) > 1 else "devoir"))
         return
 
     if action in ("pan", "jour"):
@@ -1049,6 +1237,12 @@ async def _vue_panneau(args, valeurs):
         return await vue_meteo(0)
     if quoi == "libre":
         return await vue_libre(7)
+    if quoi == "examens":
+        return await vue_examens()
+    if quoi == "comparer":
+        return await vue_comparer(celcat.semaine_de(auj))
+    if quoi == "prediction":
+        return await vue_prediction()
     if quoi == "refresh":
         return await rafraichir()
     if quoi == "statut":
@@ -1078,6 +1272,12 @@ async def _vue_navigation(action, args, valeurs):
         return await vue_stats(_date(args[0]))
     if action == "bilan":
         return await vue_bilan()
+    if action == "comparer":
+        return await vue_comparer(_date(args[0]))
+    if action == "examens":
+        return await vue_examens()
+    if action == "prediction":
+        return await vue_prediction()
     if action == "meteo":
         return await vue_meteo(int(args[0]))
     if action == "actu":
@@ -1094,8 +1294,11 @@ async def _vue_navigation(action, args, valeurs):
             return await vue_devoirs(0)
         if quoi == "photo":
             return await vue_devoirs_photo()
-        page = int(args[1]) if len(args) > 1 else 0
-        return await vue_devoirs(page)
+        # « ajout » est intercepte plus haut (il ouvre un formulaire) ; s'il
+        # arrive quand meme ici, la liste est la reponse la moins surprenante.
+        # Et un argument qui n'est pas un numero de page ne fait pas planter.
+        page = args[1] if quoi == "page" and len(args) > 1 else "0"
+        return await vue_devoirs(int(page) if page.lstrip("-").isdigit() else 0)
     if action == "devsel":
         quoi = args[0] if args else "suppr"
         for ident in valeurs:
@@ -1240,6 +1443,25 @@ async def cmd_stats(inter: discord.Interaction, quand: int = 0):
         return
     lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * quand)
     await _commande(inter, vue_stats(lundi))
+
+
+@bot.tree.command(name="comparer",
+                  description="Cette semaine contre la précédente : heures, séances, devoirs")
+@app_commands.describe(quand="quelle semaine comparer à celle d'avant (cette semaine par défaut)")
+@app_commands.choices(quand=SEMAINE_CHOIX[:3])
+async def cmd_comparer(inter: discord.Interaction, quand: int = 0):
+    lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * quand)
+    await _commande(inter, vue_comparer(lundi))
+
+
+@bot.tree.command(name="examens", description="Compte à rebours avant chaque examen")
+async def cmd_examens(inter: discord.Interaction):
+    await _commande(inter, vue_examens())
+
+
+@bot.tree.command(name="prediction", description="Les paris de l'assistant, chiffres à l'appui")
+async def cmd_prediction(inter: discord.Interaction):
+    await _commande(inter, vue_prediction())
 
 
 @bot.tree.command(name="meteo", description="Le temps qu'il fera, et s'il faut un parapluie")

@@ -426,6 +426,8 @@ def archiver(s):
         "minutes": round(s.total_minutes),
         "seances": s.seances,
         "matieres": {p.nom: round(p.minutes) for p in s.matieres},
+        "trous": round(s.trous_minutes),
+        "jours": s.jours_travailles,
     }
     ancienne = data.get(s.lundi.isoformat()) or {}
     if all(ancienne.get(k) == v for k, v in entree.items()):
@@ -537,6 +539,204 @@ def comparer(s, cours=None):
         except (KeyError, TypeError, ValueError):
             pass
     return None, ""
+
+
+# --- Comparer deux semaines --------------------------------------------------
+@dataclass(frozen=True)
+class Cote:
+    """Une semaine reduite a ses chiffres, avec l'ORIGINE de ces chiffres.
+
+    C'est ce que la comparaison manipule : peu importe que la semaine vienne
+    des cours reels ou de l'archive, tant qu'on sait le dire.
+    """
+    lundi: date
+    minutes: float
+    seances: int
+    matieres: dict            # nom -> minutes
+    trous: float | None       # None : l'archive ne le savait pas encore
+    jours: int | None
+    origine: str              # calculee · archivee · partielle · ""
+
+    @property
+    def vide(self):
+        return self.seances == 0
+
+
+def cote_semaine(cours, lundi, aujourd=None):
+    """Les chiffres d'une semaine, d'ou qu'ils viennent.
+
+    Dans l'ordre : les cours reels si la semaine est ENTIERE dans ce qu'on a,
+    l'archive sinon, les cours partiels en dernier recours — et on le dit.
+    """
+    aujourd = aujourd or date.today()
+    s = semaine(cours, lundi)
+    entiere = lundi >= aujourd or (
+        bool(cours) and min(c.jour for c in cours) <= lundi)
+    if not s.vide and entiere:
+        return Cote(lundi, s.total_minutes, s.seances,
+                    {p.nom: p.minutes for p in s.matieres}, s.trous_minutes,
+                    s.jours_travailles, "calculée")
+    archive = _lire_historique().get(lundi.isoformat())
+    if archive:
+        try:
+            return Cote(lundi, float(archive["minutes"]), int(archive.get("seances", 0)),
+                        {k: float(v) for k, v in (archive.get("matieres") or {}).items()},
+                        archive.get("trous"), archive.get("jours"), "archivée")
+        except (TypeError, ValueError):
+            pass
+    if not s.vide:
+        return Cote(lundi, s.total_minutes, s.seances,
+                    {p.nom: p.minutes for p in s.matieres}, s.trous_minutes,
+                    s.jours_travailles, "partielle")
+    return Cote(lundi, 0.0, 0, {}, None, None, "")
+
+
+def devoirs_de_la_semaine(liste_devoirs, lundi):
+    """Les devoirs a rendre cette semaine-la, faits ou non."""
+    import devoirs as dv
+    fin = lundi + timedelta(days=6)
+    sortie = []
+    for d in liste_devoirs or []:
+        ech = dv.echeance_dt(d)
+        if ech is not None and lundi <= ech.date() <= fin:
+            sortie.append(d)
+    return sortie
+
+
+def _fleche(ecart, fmt):
+    if ecart is None:
+        return ""
+    if abs(ecart) < 1e-9:
+        return "＝ pareil"
+    return f"{'▲' if ecart > 0 else '▼'} {'+' if ecart > 0 else '−'}{fmt(abs(ecart))}"
+
+
+def bloc_comparaison(cette, avant, devoirs_cette, devoirs_avant):
+    """« Cette semaine vs la precedente », en lignes Markdown."""
+    def h(m):
+        return vue.duree_fr(m)
+
+    lignes = []
+    if cette.vide and avant.vide:
+        return ["Aucune des deux semaines n'est connue. CELCAT ne sert que "
+                "l'avenir, et l'archive se remplit au fil des semaines."]
+    if cette.vide:
+        lignes.append("⚠️ Cette semaine est vide dans ce que connaît l'assistant.")
+    if avant.vide:
+        lignes.append("⚠️ La semaine précédente n'est pas connue : CELCAT ne sert "
+                      "que l'avenir, et l'assistant ne l'a pas encore archivée. "
+                      "Il retient chaque semaine à venir au fil de l'eau : la "
+                      "comparaison marchera d'ici une à deux semaines.")
+    if avant.origine == "archivée":
+        lignes.append("-# semaine précédente : d'après l'archive")
+    if cette.origine == "partielle":
+        lignes.append("-# cette semaine : jours passés non comptés")
+
+    def ligne(nom, val_c, val_a, fmt):
+        ecart = None if (val_c is None or val_a is None or avant.vide) else val_c - val_a
+        texte = f"**{nom}** — **{fmt(val_c) if val_c is not None else '?'}**"
+        if ecart is not None:
+            texte += f"  {_fleche(ecart, fmt)}"
+            if abs(ecart) > 1e-9:
+                texte += f"  -# (contre {fmt(val_a)})"
+        return texte
+
+    lignes += ["",
+               ligne("Cours", cette.minutes, avant.minutes, h),
+               ligne("Séances", cette.seances, avant.seances, str),
+               ligne("Jours avec cours", cette.jours, avant.jours, str),
+               ligne("Trous", cette.trous, avant.trous, h),
+               ligne("Devoirs à rendre", len(devoirs_cette), len(devoirs_avant), str)]
+
+    noms = set(cette.matieres) | set(avant.matieres)
+    if noms and not avant.vide:
+        detail = []
+        for nom in noms:
+            c, a = cette.matieres.get(nom), avant.matieres.get(nom)
+            if c is None:
+                detail.append((a, f"• {nom} — plus au programme *(−{h(a)})*"))
+            elif a is None:
+                detail.append((c, f"• {nom} — **{h(c)}** *(nouveau)*"))
+            elif abs(c - a) >= 1:
+                detail.append((abs(c - a), f"• {nom} — **{h(c)}**  {_fleche(c - a, h)}"))
+        if detail:
+            lignes += ["", "**Par matière, ce qui bouge**"]
+            lignes += [t for _, t in sorted(detail, key=lambda x: -x[0])[:8]]
+    return lignes
+
+
+# --- Les examens -------------------------------------------------------------
+def examens(cours, liste_devoirs=None, maintenant=None):
+    """Tous les examens a venir, d'ou qu'ils viennent, tries par date.
+
+    CELCAT en connait certains (categorie ou intitule « examen », « partiel »,
+    « DS »...), ton carnet de devoirs en connait d'autres (type examen). Les
+    deux se completent ; un doublon evident (meme jour, meme matiere) n'est
+    garde qu'une fois, version CELCAT.
+    """
+    maintenant = maintenant or datetime.now()
+    sortie = []
+    for c in cours:
+        if c.est_examen and c.est_cours and (c.fin or c.debut) >= maintenant:
+            sortie.append({"quand": c.debut, "titre": c.titre or c.module,
+                           "matiere": _nom_matiere(c), "ou": c.ou,
+                           "source": "celcat", "duree": c.minutes})
+    for d in liste_devoirs or []:
+        import devoirs as dv
+        if d.get("fait") or d.get("type") != "examen":
+            continue
+        ech = dv.echeance_dt(d)
+        if ech is None or ech < maintenant:
+            continue
+        cle = (ech.date(), celcat.normaliser(d.get("matiere") or d.get("titre") or ""))
+        if any((e["quand"].date(), celcat.normaliser(e["matiere"])) == cle for e in sortie):
+            continue
+        sortie.append({"quand": ech, "titre": d.get("titre") or "Examen",
+                       "matiere": d.get("matiere") or "", "ou": "",
+                       "source": "devoir", "duree": 0, "id": d.get("id"),
+                       "note": d.get("note") or ""})
+    sortie.sort(key=lambda e: e["quand"])
+    for e in sortie:
+        e["jours"] = (e["quand"].date() - maintenant.date()).days
+    return sortie
+
+
+def minutes_libres(cours, jusqu_a, depuis=None):
+    """Le temps libre exploitable d'ici une date, EN SEMAINE : les trous et
+    les demi-journees vides, entre journee_debut et journee_fin.
+
+    Les week-ends sont exclus, a dessein : compter onze heures « libres » par
+    samedi et dimanche donne un total enorme et inutile. Ce qu'on veut savoir,
+    c'est ce qu'on peut reviser sans toucher a ses week-ends."""
+    depuis = depuis or datetime.now()
+    mini = config.CRENEAU_LIBRE_MINUTES
+    total = 0.0
+    jour = depuis.date()
+    while jour <= jusqu_a.date():
+        if jour.weekday() >= 5:
+            jour += timedelta(days=1)
+            continue
+        borne_debut = max(vue.a_heure(jour, config.JOURNEE_DEBUT, (8, 0)), depuis)
+        borne_fin = min(vue.a_heure(jour, config.JOURNEE_FIN, (19, 0)),
+                        jusqu_a if jour == jusqu_a.date() else datetime.max)
+        curseur = borne_debut
+        for c in celcat.du_jour(cours, jour):
+            if not c.est_cours:
+                continue
+            if c.debut > curseur:
+                creux = (min(c.debut, borne_fin) - curseur).total_seconds() / 60
+                if creux >= mini:
+                    total += creux
+            curseur = max(curseur, c.fin or c.debut)
+        if borne_fin > curseur:
+            creux = (borne_fin - curseur).total_seconds() / 60
+            if creux >= mini:
+                total += creux
+        jour += timedelta(days=1)
+    return total
+
+
+nom_matiere = _nom_matiere       # expose pour bot.py (les paris)
 
 
 # --- La version texte --------------------------------------------------------

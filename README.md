@@ -169,6 +169,9 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/libre` | tes créneaux libres |
 | `/stats [quand]` | **ce que pèse ta semaine** en photo : heures, matières, trous, jour le plus lourd. `quand: tout l'emploi du temps` — **toutes les heures par matière**, et semaine par semaine |
 | `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
+| `/comparer [quand]` | **cette semaine contre la précédente** : heures, séances, trous, devoirs à rendre, et ce qui bouge matière par matière |
+| `/examens` | **compte à rebours** avant chaque examen — ceux de CELCAT et ceux de ton carnet réunis — et le temps libre pour réviser d'ici le premier |
+| `/prediction` | les paris de l'assistant 🎲 : le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie… des vrais chiffres, des fausses cotes |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |
 | `/panneau` | épingle un panneau de boutons et un menu « voir un jour de la semaine » — tout ça sans rien taper |
