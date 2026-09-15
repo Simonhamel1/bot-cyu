@@ -20,6 +20,11 @@ fichier : **`config.yaml`**. Aucun fichier Python n'a de valeur à modifier.
 | **18 h** | `#devoirs` | « tu as eu Corporate finance et VBA, des devoirs à noter ? » |
 | dès qu'un cours bouge | `#alertes` | **la photo du changement**, et **il te tague** |
 | en permanence | `#edt` · `#statut` | l'image de la semaine et le panneau d'état, réécrits sur place, **sans notification** |
+| **8 h, le jour J** | `#annonces` | 🎂 **joyeux anniversaire** à qui a donné le sien avec `/anniversaire` |
+| à l'heure dite | là où il a été posé | ⏰ chaque **rappel** posé avec `/rappel`, en mentionnant qui il faut |
+| à la fin de chaque sondage | en réponse au sondage | 📊 **le résultat**, avec le vainqueur |
+| toutes les heures | les **événements** du serveur | 📅 chaque **examen** connu devient un événement Discord (cloche « intéressé ») |
+| dimanche 18 h | `#predictions` | 🔮 **le point** : ce qu'il reste à trancher, et le classement |
 
 Il n'envoie **pas** de rappel 20 min avant chaque cours : c'était du bruit, les
 deux briefings disent tout. Si tu en veux quand même, remplis
@@ -144,6 +149,50 @@ au passage (`donnees/semaines.json`), ce qui lui permet de comparer avec la
 semaine d'avant — et quand le compte ne peut pas être complet, **il l'écrit
 sur l'image** au lieu de laisser croire à un total exact.
 
+### C'est la plateforme de la promo, pas seulement ton agenda
+
+Trente-quatre personnes dans une classe, aucune plateforme officielle : le
+serveur Discord devient le lieu où tout se passe, toute l'année. Le bot y
+ajoute ce qu'un groupe a besoin de faire ensemble — et il le fait avec les
+outils **natifs** de Discord, pas avec des bricolages à base de réactions.
+
+**Des sondages, les vrais.** `/sondage question: reponses:` crée un sondage
+Discord — les barres qui se remplissent en direct, le vote anonyme, la fin
+programmée. Les réponses s'écrivent naturellement (`🍕 Pizza ; 🍔 Burger`,
+ou une par ligne, l'emoji en tête devient l'icône), des jeux tout prêts sont
+proposés pendant la frappe (« Je viens / En retard / Absent », les jours de la
+semaine…), et **quand le sondage se termine, le bot poste le résultat** en
+réponse, avec le vainqueur — sinon il reste enfoui trois écrans plus haut.
+
+**Des prédictions, comme des sondages.** `/parier` pose une prédiction —
+« Kevin va valider l'année », « le cours de VBA de jeudi va sauter » — et la
+carte part dans `#predictions` avec ses boutons `👍 Oui · 👎 Non`, réécrite à
+chaque vote. L'auteur tranche le jour venu (`✔️ C'est arrivé` / `✖️ Raté`), la
+carte se fige, l'annonce tombe dans le salon, et le classement sait qui avait
+raison : les **prophètes** (dont les prédictions se réalisent) et les
+**parieurs** (qui votent juste). Le dimanche, le bot fait le point : ce qu'il
+reste à trancher, en mentionnant les auteurs, et le podium.
+
+**Des rappels.** `/rappel quand:demain 9h texte:rendre le TP` — et à l'heure
+dite le bot te mentionne là où tu l'as posé. La grammaire est celle qu'on
+tape sans réfléchir : `dans 2h`, `ce soir`, `lundi 14h`, `12/10 8h30`,
+`prochain:maths` (un quart d'heure avant le cours). `qui: tout le salon`
+pour un `@here` — « rendu du projet à 23 h 59 ».
+
+**Des anniversaires.** `/anniversaire quand:12/10` (l'année en plus, et il
+dira ton âge), et le matin du jour J : « 🎂 Joyeux anniversaire @Simon ! »
+dans `#annonces`. `/anniversaires` dit qui est le prochain.
+
+**Les examens dans le calendrier de Discord.** Chaque examen connu — ceux que
+CELCAT annonce, ceux du carnet de devoirs — devient un **événement du
+serveur** : le bandeau en haut, le compte à rebours, et la cloche
+« intéressé » qui fait que Discord lui-même te rappelle l'épreuve. Créés,
+mis à jour et retirés tout seuls, toutes les heures, sans jamais toucher aux
+événements que vous créez à la main.
+
+Tout ça se règle dans la section `classe:` de `config.yaml`, et tout est
+facultatif.
+
 ### Il répond aux commandes — et chaque réponse a ses boutons
 
 Chaque réponse est une **carte** : un bloc coloré qui contient le titre, la
@@ -171,18 +220,23 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
 | `/comparer [quand]` | **cette semaine contre la précédente** : heures, séances, trous, devoirs à rendre, et ce qui bouge matière par matière |
 | `/examens` | **compte à rebours** avant chaque examen — ceux de CELCAT et ceux de ton carnet réunis — et le temps libre pour réviser d'ici le premier |
-| `/prediction` | **vos prédictions** 🔮 : « Kevin va valider l'année », « le cours de VBA de jeudi va sauter »… chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
-| `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise |
+| `/prediction` | **vos prédictions** 🔮 : la liste, chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
+| `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise. **Sa carte part dans `#predictions`**, avec ses boutons de vote |
+| `/sondage` | **un vrai sondage Discord** : `question:`, `reponses:` (`🍕 Pizza ; 🍔 Burger`, vide = Oui / Non), `duree:`, `plusieurs:`. Le résultat est annoncé à la fin |
+| `/rappel` | `quand:demain 9h texte:rendre le TP` — le bot te mentionne à l'heure dite, là où tu l'as posé. `qui: tout le salon` pour un @here |
+| `/rappels` | tes rappels en attente, un menu pour en annuler |
+| `/anniversaire` | `quand:12/10` — le tien ; `retirer: oui` pour sortir de la liste |
+| `/anniversaires` | les prochains de la promo |
 | `/clear [nombre]` | vider le salon, après confirmation — **les messages épinglés sont gardés** (panneau, tableaux). Droit « gérer les messages » requis |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |
-| `/panneau` | épingle un panneau de boutons et un menu « voir un jour de la semaine » — tout ça sans rien taper |
+| `/panneau` | épingle un panneau de **vingt boutons** (journée, semaine, devoirs, stats, sondage, rappel, anniversaires…) et un menu « voir un jour de la semaine » — tout ça sans rien taper |
 | `/ics` | le fichier à importer dans ton agenda |
 | `/help` | l'aide, construite depuis ta config |
 
 ---
 
-## Les sept salons
+## Les huit salons
 
 Un salon par type de message, pour régler les notifications Discord séparément.
 
@@ -195,13 +249,16 @@ Un salon par type de message, pour régler les notifications Discord séparémen
 | `#statut` | le panneau d'état permanent | muet |
 | `#commandes` | ton salon fourre-tout + le panneau de boutons | muet |
 | `#logs` | démarrages, erreurs, heartbeats | **muet** |
+| `#predictions` | le jeu des prédictions (une carte par pari, ses boutons de vote) et le point du dimanche | tous les messages |
 
 `#edt` et `#statut` ne contiennent qu'**un seul message chacun**, réécrit en
 place. Ils ne notifient donc jamais, et l'information y est toujours à jour et
 toujours en haut. Supprime le message à la main et il se régénère.
 
 Tu n'es obligé d'en créer aucun : tout salon laissé vide dans `config.yaml`
-retombe sur `webhook_secours`.
+retombe sur `webhook_secours`. Sauf `#predictions`, qui est **facultatif et
+doit être un identifiant de salon** (pas un webhook : ses cartes ont des
+boutons) — vide, les prédictions restent là où on tape `/parier`.
 
 ---
 
@@ -252,23 +309,25 @@ Sur [discord.com/developers/applications](https://discord.com/developers/applica
 3. Ouvre cette URL en remplaçant `TON_APP_ID` :
 
 ```text
-https://discord.com/oauth2/authorize?client_id=TON_APP_ID&scope=bot+applications.commands&permissions=125968
+https://discord.com/oauth2/authorize?client_id=TON_APP_ID&scope=bot+applications.commands&permissions=580550729657360
 ```
 
 Le `scope=bot+applications.commands` est indispensable. Sans
 `applications.commands`, le bot rejoint le serveur mais **aucune commande slash
 n'apparaît**. Si ton bot est déjà invité sans ce scope ou avec moins de droits,
 **réouvre simplement cette URL** : ça met à jour son rôle sans le faire quitter
-le serveur. (`125968` = la somme des permissions ci-dessous ; une ancienne
-version de ce README disait `19456`, qui n'incluait ni « gérer les messages »
-ni « joindre des fichiers » — d'où un panneau jamais épinglé et un `/clear`
-refusé.)
+le serveur. (Le nombre est la somme des permissions ci-dessous. Les anciennes
+valeurs `19456` puis `125968` n'incluaient pas tout — d'où, selon la version,
+un panneau jamais épinglé, un `/clear` refusé, ou des événements impossibles.)
 
 Permissions : voir les salons, gérer les salons, envoyer des messages, joindre
 des fichiers, intégrer des liens, lire l'historique des messages, **gérer les
-messages** (pour épingler le panneau, et pour `/clear`). Si un salon a ses
-propres permissions, elles l'emportent sur celles du rôle : c'est là qu'il faut
-regarder quand le bot dit qu'il « n'a pas le droit ».
+messages** (épingler le panneau, `/clear`), **mentionner @everyone** (les
+rappels `@here`), **gérer et créer les événements** (les examens dans le
+calendrier), **envoyer des sondages**. Le plus simple pour un serveur de
+classe : donner au bot le rôle **Administrateur**, et ne plus y penser. Si un
+salon a ses propres permissions, elles l'emportent sur celles du rôle : c'est
+là qu'il faut regarder quand le bot dit qu'il « n'a pas le droit ».
 
 ### 3. Remplir `config.yaml`
 
@@ -299,7 +358,7 @@ droit sur le salon → Copier l'identifiant, mode développeur activé) dans
 `config.yaml`. Soit tu laisses le bot les créer :
 
 ```bash
-python assistant.py salons     # crée les 7 salons ET écrit les ids dans config.yaml
+python assistant.py salons     # crée les 8 salons ET écrit les ids dans config.yaml
 python assistant.py init       # un message de test dans chacun, pour vérifier
 ```
 
@@ -472,18 +531,22 @@ systemctl --user stop assistant-cyu
 | `meteo.py` | la météo Open-Meteo : le temps de ton trajet, le parapluie, la marge de pluie |
 | `stats.py` | ce que pèse une semaine : heures, matières, trous, archive des semaines |
 | `predictions.py` | le jeu des prédictions : votes, tranchage par l'auteur, classement |
+| `sondages.py` | les sondages Discord : lire les réponses tapées, construire le sondage, retenir ceux du bot, mettre en forme le résultat |
+| `rappels.py` | les rappels : la grammaire de « quand » (`demain 9h`, `dans 2h`, `lundi 14h`…) et leur stockage |
+| `anniversaires.py` | les anniversaires : qui, quand, le prochain, l'âge |
+| `evenements.py` | les examens en événements Discord : ce qui devrait exister, ce qu'il faut créer, modifier, retirer |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |
 | `assistant.py` | le daemon et la ligne de commande |
 | `interface.py` | l'allure du bot : les cartes (conteneur coloré, photo intégrée, boutons persistants) |
-| `bot.py` | le bot Discord : commandes slash, navigation par boutons, panneau, formulaire |
+| `bot.py` | le bot Discord : commandes slash, navigation par boutons, panneau, formulaires, et la boucle `tic` (rappels, anniversaires, résultats de sondages, point des prédictions, événements) |
 | `uptime.py` | la surveillance du webmail |
 | `installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
 | `deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
 | `assistant-cyu.service` | l'unité systemd du bot |
 | `uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
 | `requirements.txt` | les dépendances Python — **discord.py 2.7 au minimum** pour les cartes |
-| `donnees/` | cache, devoirs, prédictions, état — local, jamais sur GitHub |
+| `donnees/` | cache, devoirs, prédictions, rappels, anniversaires, sondages, événements, état — local, jamais sur GitHub |
 
 ---
 
