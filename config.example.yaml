@@ -76,6 +76,14 @@ discord:
     # Demarrages, erreurs, heartbeats. A mettre en muet.
     logs: ""
 
+    # Le jeu des predictions de la promo : /parier y poste chaque prediction
+    # (une carte avec ses boutons de vote, comme un sondage), et le dimanche
+    # le bot y rappelle celles qu'il reste a trancher, avec le classement.
+    # Un IDENTIFIANT DE SALON obligatoirement, pas un webhook : les cartes
+    # ont des boutons, et un webhook ne sait pas en porter. Vide = les
+    # predictions restent la ou on tape la commande.
+    predictions: ""
+
 
 # ─── CYU : CELCAT et webmail ────────────────────────────────────────────────
 cyu:
@@ -171,14 +179,13 @@ notifications:
   silence_de: "23:00"
   silence_a: "06:30"
 
-
-# ─── Affichage ──────────────────────────────────────────────────────────────
   # Etre mentionne des qu'un cours bouge (deplace, annule, salle changee),
   # et pas seulement quand ca touche aujourd'hui ou demain.
   # false = mention uniquement pour ce qui est urgent.
   ping_changements: true
 
 
+# ─── Affichage ──────────────────────────────────────────────────────────────
 affichage:
   # Un trou dans la journee n'est signale qu'a partir de cette duree.
   trou_minutes: 45
@@ -239,6 +246,34 @@ meteo:
   # Le bulletin n'est pas redemande plus souvent que ca (minutes). Une
   # prevision horaire ne change pas toutes les trois minutes.
   cache_minutes: 30
+
+
+# ─── La promo ───────────────────────────────────────────────────────────────
+# Ce qui fait du serveur la plateforme de la classe, et pas seulement ton
+# agenda : les anniversaires, les sondages, les rappels, et les examens qui
+# deviennent des evenements Discord. Rien ici n'est obligatoire.
+classe:
+
+  # /anniversaire pour donner le sien. Le bot souhaite dans #annonces, a
+  # cette heure-la, en mentionnant la personne. false = pas d'anniversaires.
+  anniversaires: true
+  anniversaires_heure: "08:00"
+
+  # Chaque examen connu (CELCAT ou carnet) devient un EVENEMENT DISCORD : le
+  # bandeau « evenements » en haut du serveur, la cloche « interesse », et le
+  # rappel que Discord envoie tout seul. Mis a jour toutes les heures, et
+  # retire si l'examen disparait. Le bot doit avoir « Gerer les evenements ».
+  evenements_examens: true
+  evenements_horizon_jours: 60
+
+  # La duree par defaut d'un sondage (/sondage), en heures : 1 a 768.
+  sondage_duree_heures: 24
+  # Quand un sondage du bot se termine, il poste le resultat en reponse.
+  sondage_resultats: true
+
+  # Le dimanche, a l'heure du recap (recap_semaine_*), dans #predictions :
+  # les predictions qu'il reste a trancher, et le classement.
+  recap_predictions: true
 
 
 # ─── Matieres ───────────────────────────────────────────────────────────────

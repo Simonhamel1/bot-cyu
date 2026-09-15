@@ -25,7 +25,7 @@ Tu n'as pas a chercher les identifiants a la main :
 
     python assistant.py salons
 
-cree les sept salons dans la categorie et ECRIT LEURS IDENTIFIANTS DANS
+cree les salons dans la categorie et ECRIT LEURS IDENTIFIANTS DANS
 config.yaml. Relancer la commande ne cree pas de doublon.
 """
 
@@ -54,6 +54,8 @@ SALONS = {
     "statut":    ("statut", "Etat de l'assistant, prochain cours, fraicheur des donnees"),
     "commandes": ("commandes", "Tape tes commandes ici. Le panneau est epingle en haut."),
     "logs":      ("logs", "Demarrages, erreurs, heartbeats. A mettre en muet."),
+    "predictions": ("predictions", "Vos predictions et vos sondages : qui va valider, "
+                                   "quel cours va sauter. On vote, l'auteur tranche."),
 }
 
 COULEURS = {"info": 0x5865F2, "cours": 0x57F287, "devoir": 0xFEE75C,
@@ -273,9 +275,18 @@ def epingler_image(cle, chemin, titre, corps="", couleur="cours", canal="edt",
     return True
 
 
-def _mention(ping):
+def _mention(ping, utilisateurs=()):
+    """(contenu, allowed_mentions). `utilisateurs` : des identifiants Discord a
+    mentionner nommement (un anniversaire, un rappel) — ils passent meme quand
+    `mentions_actives` est a false, puisqu'on ne parle pas de toi."""
     veut = ping and config.MENTION and config.MENTIONS_ACTIVES
-    return (config.MENTION if veut else ""), {"parse": ["users"] if veut else []}
+    morceaux = [config.MENTION] if veut else []
+    ids = [str(u) for u in utilisateurs if str(u).isdigit()]
+    morceaux += [f"<@{u}>" for u in ids if f"<@{u}>" not in morceaux]
+    autorisees = {"parse": ["users"] if veut else []}
+    if ids:
+        autorisees["users"] = ids[:100]
+    return " ".join(morceaux), autorisees
 
 
 def embed(titre, corps, couleur="info", pied=None, horodate=True):
@@ -291,9 +302,10 @@ def embed(titre, corps, couleur="info", pied=None, horodate=True):
     return sortie
 
 
-def envoyer(titre, corps, couleur="info", ping=False, canal="logs", pied=None):
+def envoyer(titre, corps, couleur="info", ping=False, canal="logs", pied=None,
+            utilisateurs=()):
     """Un embed Discord dans le salon du type `canal`."""
-    contenu, autorisees = _mention(ping)
+    contenu, autorisees = _mention(ping, utilisateurs)
     return _poster(canal, {"content": contenu, "allowed_mentions": autorisees,
                            "embeds": [embed(titre, corps, couleur, pied)]})
 

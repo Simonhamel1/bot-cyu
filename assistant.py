@@ -592,7 +592,7 @@ def daemon():
 
 # --- Creation des salons -----------------------------------------------------
 def creer_salons(categorie=""):
-    """Le bot cree les sept salons dans la categorie et ecrit leurs
+    """Le bot cree les salons dans la categorie et ecrit leurs
     identifiants dans config.yaml. Idempotent."""
     try:
         guilde, salons = notif.creer_salons(categorie)
@@ -619,6 +619,9 @@ def tester_salons():
     """Un message par salon : le seul moyen de verifier que chaque aiguillage
     tombe vraiment ou tu crois."""
     for canal in config.CANAUX:
+        if canal in config.CANAUX_BOT_SEULEMENT and not config.salon_configure_bot(canal):
+            print(f"-     {canal:10s} -> pas de salon dedie (facultatif)")
+            continue
         sujet = notif.SALONS[canal][1]
         mode, cible = notif.destination(canal)
         ok = envoyer(f"Test — #{notif.SALONS[canal][0]}",

@@ -103,6 +103,7 @@ _moi = _section("moi")
 _notif = _section("notifications")
 _aff = _section("affichage")
 _meteo = _section("meteo")
+_classe = _section("classe")
 
 
 def _txt(source, cle, defaut=""):
@@ -163,10 +164,28 @@ WEBHOOK_SECOURS = _txt(_discord, "webhook_secours")
 
 # L'ordre compte : c'est celui de la creation des salons et de l'affichage
 # dans /statut.
-CANAUX = ("annonces", "edt", "devoirs", "alertes", "statut", "commandes", "logs")
+CANAUX = ("annonces", "edt", "devoirs", "alertes", "statut", "commandes", "logs",
+          "predictions")
+
+# Les salons qui n'ont de sens QUE par le bot (des cartes a boutons, qu'un
+# webhook ne sait pas porter). Vides, ils ne retombent pas sur le secours :
+# la fonction se passe simplement de salon dedie.
+CANAUX_BOT_SEULEMENT = ("predictions",)
 
 _salons_bruts = _discord.get("salons") or {}
 SALONS = {canal: _txt(_salons_bruts, canal) for canal in CANAUX}
+
+
+def salon_bot(canal):
+    """L'identifiant (int) du salon `canal` quand c'est bien un salon poste par
+    le bot, sinon None : un webhook ne peut pas porter de boutons."""
+    valeur = str(SALONS.get(canal) or "").strip()
+    return int(valeur) if valeur.isdigit() else None
+
+
+def salon_configure_bot(canal):
+    return salon_bot(canal) is not None
+
 
 # Un salon inconnu dans config.yaml est presque toujours une faute de frappe :
 # le signaler tout de suite evite de chercher pendant une heure pourquoi rien
@@ -264,6 +283,20 @@ METEO_CACHE_MINUTES = max(10, _entier(_meteo, "cache_minutes", 30))
 METEO_BRIEFING = _bool(_meteo, "dans_le_briefing", True)
 
 
+# --- La promo ----------------------------------------------------------------
+# Les anniversaires : /anniversaire, et un message dans #annonces le jour J.
+ANNIVERSAIRES = _bool(_classe, "anniversaires", True)
+ANNIVERSAIRES_HEURE = _txt(_classe, "anniversaires_heure", "08:00")
+# Les examens en evenements Discord (bandeau du serveur, cloche « interesse »).
+EVENEMENTS_EXAMENS = _bool(_classe, "evenements_examens", True)
+EVENEMENTS_HORIZON_JOURS = max(1, _entier(_classe, "evenements_horizon_jours", 60))
+# Discord borne un sondage entre 1 heure et 32 jours.
+SONDAGE_DUREE_HEURES = min(768, max(1, _entier(_classe, "sondage_duree_heures", 24)))
+SONDAGE_RESULTATS = _bool(_classe, "sondage_resultats", True)
+# Le dimanche dans #predictions : ce qu'il reste a trancher, et le classement.
+RECAP_PREDICTIONS = _bool(_classe, "recap_predictions", True)
+
+
 # --- Matieres ----------------------------------------------------------------
 MATIERES = BRUT.get("matieres") if isinstance(BRUT.get("matieres"), dict) else {}
 
@@ -276,6 +309,11 @@ FICHIER_CACHE = DONNEES / "edt_cache.json"      # dernier emploi du temps connu
 FICHIER_ETAT = DONNEES / "etat.json"            # ce qui a deja ete envoye
 FICHIER_METEO = DONNEES / "meteo.json"          # dernier bulletin Open-Meteo
 FICHIER_SEMAINES = DONNEES / "semaines.json"    # le poids des semaines passees
+FICHIER_RAPPELS = DONNEES / "rappels.json"      # les rappels poses avec /rappel
+FICHIER_ANNIVERSAIRES = DONNEES / "anniversaires.json"
+FICHIER_SONDAGES = DONNEES / "sondages.json"    # les sondages du bot en cours
+FICHIER_EVENEMENTS = DONNEES / "evenements.json"  # examens -> evenements Discord
+FICHIER_ETAT_BOT = DONNEES / "etat-bot.json"    # ce que le bot a deja envoye
 
 
 def preparer_dossiers():
@@ -378,7 +416,9 @@ def resume():
     ]
     for canal in CANAUX:
         valeur = SALONS[canal]
-        if not valeur:
+        if not valeur and canal in CANAUX_BOT_SEULEMENT:
+            etat = "vide -> pas de salon dedie"
+        elif not valeur:
             etat = "vide -> webhook de secours"
         elif valeur.startswith("http"):
             etat = "webhook"
@@ -410,5 +450,11 @@ def resume():
         f"  silence              {SILENCE_DE or '-'} -> {SILENCE_A or '-'}",
         f"  meteo                " + (f"{METEO_LIEU} ({METEO_LAT:.4f}, {METEO_LON:.4f})"
                                       if METEO_ACTIVE else "desactivee"),
+        f"  anniversaires        " + (f"a {ANNIVERSAIRES_HEURE} dans #annonces"
+                                      if ANNIVERSAIRES else "desactives"),
+        f"  examens -> evenements" + (f" oui, {EVENEMENTS_HORIZON_JOURS} jours en avant"
+                                      if EVENEMENTS_EXAMENS else " non"),
+        f"  sondages             {SONDAGE_DUREE_HEURES} h par defaut"
+        + (", resultat annonce" if SONDAGE_RESULTATS else ""),
     ]
     return lignes
