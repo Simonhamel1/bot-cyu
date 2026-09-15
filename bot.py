@@ -74,6 +74,7 @@ import image as img
 import interface as ui
 import meteo
 import notif
+import predictions as pr
 import stats
 import statut as st
 import vue
@@ -95,6 +96,11 @@ GRILLE_MAX_JOURS = 41
 # Combien de devoirs par page dans la liste interactive. Chaque devoir prend
 # trois composants Discord (section, texte, bouton) : six, c'est la marge.
 DEVOIRS_PAR_PAGE = 6
+# Une prediction en prend quatre (texte, rangee, deux boutons de vote).
+PREDICTIONS_PAR_PAGE = 5
+# /clear : au-dela, les messages de plus de 14 jours (supprimes un par un)
+# feraient durer l'operation au-dela de ce que Discord accorde.
+CLEAR_MAX = 300
 
 TYPES_DEVOIR = [
     ("Devoir", "devoir", "exercices, lecture, a rendre en cours", "📝"),
@@ -786,7 +792,7 @@ async def vue_examens():
 
 
 # --- Les paris de l'assistant ------------------------------------------------
-async def vue_prediction():
+async def vue_paris_assistant():
     """Des pronostics, tires de vraies donnees, presentes comme des paris.
 
     C'est de l'humour, mais chaque pari repose sur un chiffre reel : les
@@ -867,14 +873,220 @@ async def vue_prediction():
                    f"-# cote {cote:.2f} · {p * 100:.0f} % de chances selon l'assistant", ""]
     if not paris:
         lignes = ["Pas assez de données pour parier. Reviens quand CELCAT aura parlé."]
-    boutons = [_b("Rejouer", "prediction", style="bleu", emoji="🎲"),
+    boutons = [_b("Rejouer", "paris", style="bleu", emoji="🎲"),
+               _b("Vos prédictions", "pred", "page", 0, emoji="🔮"),
                _b("Ce qui a changé", "actu", 7, emoji="🔔"),
-               _b("Météo", "meteo", 0, emoji="🌦️"),
-               _b("Les stats", "stats", cette, emoji="📊")]
+               _b("Météo", "meteo", 0, emoji="🌦️")]
     return carte("Les paris de l'assistant", lignes, "info",
                  sous_titre="des vrais chiffres, des fausses cotes",
                  boutons=boutons,
                  pied="l'assistant n'a jamais raison, mais il a des chiffres"), []
+
+
+# --- Vos predictions : le jeu ------------------------------------------------
+def _texte_prediction(p):
+    ech = pr.echeance_date(p)
+    details = []
+    if pr.en_retard(p):
+        details.append("⏰ échéance dépassée — à trancher")
+    elif ech:
+        details.append(f"d'ici le {vue.jour_fr(ech, court=True)}")
+    elif p.get("echeance_texte"):
+        details.append(f"d'ici « {p['echeance_texte']} »")
+    if p.get("mise"):
+        details.append(f"mise : {p['mise']}")
+    texte = f"**#{p['id']} · {p['auteur']}** — « {p['texte']} »"
+    if details:
+        texte += "\n-# " + " · ".join(details)
+    pour, contre = pr.noms(p, "oui"), pr.noms(p, "non")
+    if pour or contre:
+        texte += "\n-# " + " · ".join(x for x in (f"👍 {pour}" if pour else "",
+                                                  f"👎 {contre}" if contre else "") if x)
+    else:
+        texte += "\n-# personne n'a encore voté"
+    return texte
+
+
+async def vue_predictions(page=0):
+    """Les predictions en jeu : deux boutons de vote par ligne, un menu pour
+    trancher ou supprimer (l'auteur seulement), et de quoi en poser une."""
+    liste = await asyncio.to_thread(pr.lire)
+    en_jeu = pr.ouvertes(liste)
+    # Celles a trancher d'abord, puis les plus recentes.
+    en_jeu.sort(key=lambda p: (not pr.en_retard(p), -int(p.get("id", 0))))
+    _, _, chiffres = pr.classement(liste)
+    pages = max(1, -(-len(en_jeu) // PREDICTIONS_PAR_PAGE))
+    page = max(0, min(int(page), pages - 1))
+
+    sous = f"{chiffres['ouvertes']} en jeu · {chiffres['tranchees']} tranchée"
+    sous += "s" if chiffres["tranchees"] > 1 else ""
+    if chiffres["reussite_votes"] is not None:
+        sous += f" · les parieurs ont raison à {chiffres['reussite_votes']:.0f} %"
+    if pages > 1:
+        sous += f" · page {page + 1}/{pages}"
+
+    composants, options = [], []
+    for p in en_jeu[page * PREDICTIONS_PAR_PAGE:(page + 1) * PREDICTIONS_PAR_PAGE]:
+        oui, non = pr.comptes(p)
+        composants.append(discord.ui.TextDisplay(_texte_prediction(p)[:ui.TEXTE_MAX]))
+        rangee = discord.ui.ActionRow()
+        rangee.add_item(BoutonCyu(_b(f"Oui ({oui})", "pred", "oui", p["id"], page,
+                                     style="vert", emoji="👍")))
+        rangee.add_item(BoutonCyu(_b(f"Non ({non})", "pred", "non", p["id"], page,
+                                     style="rouge", emoji="👎")))
+        composants.append(rangee)
+        court = p["texte"][:60]
+        options += [(f"✔ #{p['id']} — c'est arrivé", f"ok:{p['id']}", court, "✅"),
+                    (f"✘ #{p['id']} — raté", f"ko:{p['id']}", court, "❌"),
+                    (f"🗑 #{p['id']} — supprimer", f"suppr:{p['id']}", court, None)]
+    if not en_jeu:
+        composants = [discord.ui.TextDisplay(
+            "Aucune prédiction en jeu. Lance-toi : **🔮 Parier**.\n"
+            "-# « Kevin va valider l'année », « le cours de VBA de jeudi va "
+            "sauter »… tout le monde vote, l'auteur tranche, le classement juge.")]
+
+    actions = [[_b("Parier", "pred", "ajout", style="vert", emoji="🔮"),
+                _b("Classement", "pred", "classement", emoji="🏆"),
+                _b("Tranchées", "pred", "closes", emoji="📜"),
+                _b("Les paris de l'assistant", "paris", emoji="🤖"),
+                _b("Actualiser", "pred", "page", page, emoji="🔄")]]
+    if pages > 1:
+        actions.append([_b("◀", "pred", "page", page - 1, inactif=page == 0),
+                        _b("▶", "pred", "page", page + 1, inactif=page >= pages - 1)])
+    menus = [ui.Menu("predsel", "Trancher ou supprimer une prédiction (l'auteur seulement)…",
+                     options[:25])] if options else []
+    teinte = "devoir" if any(pr.en_retard(p) for p in en_jeu) else "info"
+    return carte_composee("Prédictions", composants, teinte, sous_titre=sous,
+                          boutons=actions, menus=menus,
+                          pied="c'est vous qui pariez, l'auteur tranche"), []
+
+
+async def vue_predictions_closes():
+    liste = await asyncio.to_thread(pr.lire)
+    closes = pr.closes(liste)
+    boutons = [_b("En jeu", "pred", "page", 0, style="bleu", emoji="🔮"),
+               _b("Classement", "pred", "classement", emoji="🏆")]
+    if not closes:
+        return carte("Prédictions tranchées", ["Aucune pour l'instant : les paris "
+                                                "sont encore ouverts."], "calme",
+                     boutons=boutons), []
+    lignes = []
+    for p in closes[:12]:
+        oui, non = pr.comptes(p)
+        justes = pr.noms(p, p["resultat"])
+        quand = str(p.get("tranche_le", ""))[:10]
+        try:
+            quand = vue.jour_fr(date.fromisoformat(quand), court=True)
+        except ValueError:
+            pass
+        lignes.append(f"{'✅' if p['resultat'] == 'oui' else '❌'} **#{p['id']} · "
+                      f"{p['auteur']}** — « {p['texte']} »\n-# tranché {quand} · "
+                      f"👍 {oui} · 👎 {non}"
+                      + (f" · avaient raison : {justes}" if justes else ""))
+    if len(closes) > 12:
+        lignes.append(f"-# … et {len(closes) - 12} autres")
+    return carte("Prédictions tranchées", lignes, "info",
+                 sous_titre=f"{len(closes)} au total", boutons=boutons), []
+
+
+async def vue_classement():
+    liste = await asyncio.to_thread(pr.lire)
+    prophetes, parieurs, chiffres = pr.classement(liste)
+    boutons = [_b("En jeu", "pred", "page", 0, style="bleu", emoji="🔮"),
+               _b("Tranchées", "pred", "closes", emoji="📜")]
+    if not chiffres["tranchees"]:
+        return carte("Classement", ["Rien à classer tant qu'aucune prédiction n'est "
+                                    "tranchée."], "calme", boutons=boutons), []
+    medailles = ["🥇", "🥈", "🥉", "4.", "5."]
+    lignes = ["### 🔮 Les prophètes", "-# dont les prédictions se réalisent"]
+    for m, (nom, ok, n) in zip(medailles, prophetes[:5]):
+        lignes.append(f"{m} **{nom}** — {ok}/{n} réalisée{'s' if ok > 1 else ''}")
+    lignes += ["", "### 🎯 Les parieurs", "-# qui votent juste"]
+    for m, (nom, ok, n) in zip(medailles, parieurs[:5]):
+        lignes.append(f"{m} **{nom}** — {ok}/{n} vote{'s' if n > 1 else ''} juste"
+                      f"{'s' if ok > 1 else ''}")
+    if not parieurs:
+        lignes.append("personne n'a encore voté sur une prédiction tranchée")
+    sous = (f"{chiffres['tranchees']} tranchée{'s' if chiffres['tranchees'] > 1 else ''} · "
+            f"{chiffres['realisees']} réalisée{'s' if chiffres['realisees'] > 1 else ''}")
+    return carte("Classement", lignes, "info", sous_titre=sous, boutons=boutons), []
+
+
+class ModalePrediction(discord.ui.Modal, title="Une prédiction"):
+    texte = discord.ui.Label(
+        text="Ta prédiction",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.paragraph, max_length=300,
+            placeholder="Kevin va valider l'année · le cours de VBA de jeudi va sauter"))
+    pour = discord.ui.Label(
+        text="D'ici quand ?",
+        description="12/10 · +30 · vendredi — ou en toutes lettres (« la fin de "
+                    "l'année ») — facultatif",
+        component=discord.ui.TextInput(required=False, max_length=60))
+    mise = discord.ui.Label(
+        text="La mise", description="facultatif — un kebab, un café, l'honneur",
+        component=discord.ui.TextInput(required=False, max_length=80))
+
+    async def on_submit(self, inter: discord.Interaction):
+        texte = str(self.texte.component.value).strip()
+        pour = str(self.pour.component.value).strip()
+        mise = str(self.mise.component.value).strip()
+        echeance, echeance_texte = "", ""
+        if pour:
+            cours, _ = await _donnees()
+            try:
+                echeance = dv.resoudre_echeance(pour, cours, "") or ""
+            except ValueError:
+                echeance_texte = pour        # « la fin de l'annee » : on garde tel quel
+        await asyncio.to_thread(pr.ajouter, texte, inter.user.id,
+                                inter.user.display_name, echeance, echeance_texte, mise)
+        # Publique : une prediction est faite pour etre vue, et votee.
+        vue_, _ = await vue_predictions(0)
+        await inter.response.send_message(view=vue_)
+
+
+# --- /clear : vider un salon -------------------------------------------------
+def _peut_nettoyer(inter):
+    """Le droit « gerer les messages » dans CE salon, ou administrateur."""
+    salon = inter.channel
+    if inter.guild is None or not hasattr(salon, "permissions_for"):
+        return False
+    droits = salon.permissions_for(inter.user)
+    return bool(droits.manage_messages or droits.administrator)
+
+
+async def _nettoyer(inter, args):
+    """La confirmation de /clear a ete cliquee : on vide, ou on annule."""
+    if args[:1] != ["go"]:
+        await inter.response.edit_message(
+            view=ui.erreur("Rien n'a été supprimé.", "Annulé"), attachments=[])
+        return
+    if not _peut_nettoyer(inter):
+        await inter.response.edit_message(
+            view=ui.erreur("Il faut le droit « gérer les messages » dans ce salon."))
+        return
+    nombre = int(args[1]) if len(args) > 1 and args[1].isdigit() else 100
+    nombre = max(1, min(nombre, CLEAR_MAX))
+    await inter.response.defer()
+    if not hasattr(inter.channel, "purge"):
+        await inter.edit_original_response(view=ui.erreur("Ce type de salon ne se vide pas."))
+        return
+    try:
+        # Les epingles sont gardees : le panneau et les tableaux vivants en
+        # font partie, et les effacer serait le meilleur moyen de tout casser.
+        supprimes = await inter.channel.purge(limit=nombre, check=lambda m: not m.pinned,
+                                              bulk=True)
+    except discord.Forbidden:
+        await inter.edit_original_response(view=ui.erreur(
+            "Le bot n'a pas le droit « gérer les messages » dans ce salon."))
+        return
+    n = len(supprimes)
+    await inter.edit_original_response(view=carte(
+        "Salon vidé", [f"**{n}** message{'s' if n > 1 else ''} supprimé{'s' if n > 1 else ''}.",
+                       "-# Les messages épinglés ont été gardés."
+                       + (f" Il en restait peut-être plus que {nombre} : relance "
+                          f"/clear." if n >= nombre else "")],
+        "calme", pied=False))
 
 
 # --- La meteo ----------------------------------------------------------------
@@ -1017,7 +1229,7 @@ def vue_panneau():
          _b("Créneaux libres", "pan", "libre", emoji="🫧")],
         [_b("Examens", "pan", "examens", emoji="🎓"),
          _b("Comparer", "pan", "comparer", emoji="⚖️"),
-         _b("Les paris", "pan", "prediction", emoji="🎲"),
+         _b("Prédictions", "pan", "prediction", emoji="🔮"),
          _b("Relire CELCAT", "pan", "refresh", emoji="🔄"),
          _b("État", "pan", "statut", emoji="🩺")],
     ]
@@ -1062,8 +1274,12 @@ def texte_aide():
         "trous, devoirs, et ce qui bouge par matière",
         "`/examens` — **compte à rebours** avant chaque examen, CELCAT et ton "
         "carnet réunis, avec le temps libre pour réviser d'ici là",
-        "`/prediction` — les paris de l'assistant 🎲 (des vrais chiffres, des "
-        "fausses cotes)",
+        "`/prediction` — **vos prédictions** 🔮 : qui va valider l'année, quel cours "
+        "va sauter… chacun vote 👍👎, l'auteur tranche, le classement juge. "
+        "`/parier` pour en poser une. Les paris de l'assistant 🤖 (chiffres réels) "
+        "sont derrière un bouton",
+        "`/clear` — vider ce salon (les épinglés sont gardés) — droit « gérer les "
+        "messages » requis",
         "",
         "### Les devoirs",
         "`/devoirs` — la liste, **un bouton ✅ par devoir**, un menu pour supprimer",
@@ -1205,21 +1421,27 @@ async def agir(inter, action, args, valeurs=()):
     if action == "dev" and args[:1] == ["ajout"]:
         await inter.response.send_modal(ModaleDevoir(args[1] if len(args) > 1 else "devoir"))
         return
+    if action == "pred" and args[:1] == ["ajout"]:
+        await inter.response.send_modal(ModalePrediction())
+        return
+    if action == "clear":
+        await _nettoyer(inter, args)
+        return
 
     if action in ("pan", "jour"):
         await inter.response.defer(ephemeral=True, thinking=True)
-        vue_, fichiers = await _vue_panneau(args, valeurs)
+        vue_, fichiers = await _vue_panneau(args, valeurs, inter)
         await repondre(inter, vue_, fichiers, ephemere=True)
         return
 
     # Navigation : on accuse reception tout de suite (l'image peut prendre une
     # seconde), puis on reecrit le message sur place.
     await inter.response.defer()
-    vue_, fichiers = await _vue_navigation(action, args, valeurs)
+    vue_, fichiers = await _vue_navigation(action, args, valeurs, inter)
     await remplacer(inter, vue_, fichiers)
 
 
-async def _vue_panneau(args, valeurs):
+async def _vue_panneau(args, valeurs, inter=None):
     quoi = (args or valeurs or ["auj"])[0]
     auj = date.today()
     if quoi == "auj":
@@ -1254,7 +1476,7 @@ async def _vue_panneau(args, valeurs):
     if quoi == "comparer":
         return await vue_comparer(celcat.semaine_de(auj))
     if quoi == "prediction":
-        return await vue_prediction()
+        return await vue_predictions(0)
     if quoi == "refresh":
         return await rafraichir()
     if quoi == "statut":
@@ -1266,7 +1488,10 @@ async def _vue_panneau(args, valeurs):
     return ui.erreur(f"action inconnue : `{quoi}`"), []
 
 
-async def _vue_navigation(action, args, valeurs):
+async def _vue_navigation(action, args, valeurs, inter=None):
+    """`inter` sert aux actions qui ont besoin de savoir QUI clique : voter,
+    trancher, supprimer une prediction. None dans les tests : ces actions
+    se contentent alors de reafficher la liste."""
     if action == "edt":
         mode = args[0] if args else "j"
         if mode == "j":
@@ -1288,8 +1513,42 @@ async def _vue_navigation(action, args, valeurs):
         return await vue_comparer(_date(args[0]))
     if action == "examens":
         return await vue_examens()
-    if action == "prediction":
-        return await vue_prediction()
+    if action == "paris":
+        return await vue_paris_assistant()
+    if action == "pred":
+        quoi = args[0] if args else "page"
+        if quoi in ("oui", "non") and len(args) > 1:
+            if inter is not None:
+                await asyncio.to_thread(pr.voter, args[1], inter.user.id,
+                                        inter.user.display_name, quoi)
+            page = args[2] if len(args) > 2 else "0"
+            return await vue_predictions(int(page) if page.isdigit() else 0)
+        if quoi == "closes":
+            return await vue_predictions_closes()
+        if quoi == "classement":
+            return await vue_classement()
+        page = args[1] if quoi == "page" and len(args) > 1 else "0"
+        return await vue_predictions(int(page) if page.lstrip("-").isdigit() else 0)
+    if action == "predsel":
+        refus = []
+        for valeur in valeurs if inter is not None else []:
+            op, _, ident = str(valeur).partition(":")
+            if op in ("ok", "ko"):
+                _, etat = await asyncio.to_thread(pr.trancher, ident,
+                                                  "oui" if op == "ok" else "non",
+                                                  inter.user.id)
+            elif op == "suppr":
+                _, etat = await asyncio.to_thread(pr.supprimer, ident, inter.user.id)
+            else:
+                continue
+            if etat == "pas_auteur":
+                refus.append(f"#{ident} n'est pas à toi : seul l'auteur tranche ou supprime.")
+            elif etat == "deja":
+                refus.append(f"#{ident} est déjà tranchée.")
+        if refus and inter is not None:
+            # Apres un defer, un followup n'accepte que du texte (voir repondre()).
+            await inter.followup.send("\n".join(refus), ephemeral=True)
+        return await vue_predictions(0)
     if action == "meteo":
         return await vue_meteo(int(args[0]))
     if action == "actu":
@@ -1476,9 +1735,39 @@ async def cmd_examens(inter: discord.Interaction):
     await _commande(inter, vue_examens())
 
 
-@bot.tree.command(name="prediction", description="Les paris de l'assistant, chiffres à l'appui")
+@bot.tree.command(name="prediction",
+                  description="Vos prédictions : qui va valider, quel cours va sauter… votez !")
 async def cmd_prediction(inter: discord.Interaction):
-    await _commande(inter, vue_prediction())
+    await _commande(inter, vue_predictions(0))
+
+
+@bot.tree.command(name="parier", description="Poser une prédiction (un formulaire s'ouvre)")
+async def cmd_parier(inter: discord.Interaction):
+    await inter.response.send_modal(ModalePrediction())
+
+
+@bot.tree.command(name="clear", description="Vider ce salon — les messages épinglés sont gardés")
+@app_commands.describe(nombre=f"combien de messages au plus (100 par défaut, {CLEAR_MAX} maximum)")
+@app_commands.default_permissions(manage_messages=True)
+async def cmd_clear(inter: discord.Interaction, nombre: int = 100):
+    nombre = max(1, min(nombre, CLEAR_MAX))
+    if not _peut_nettoyer(inter):
+        await inter.response.send_message(
+            view=ui.erreur("Il faut le droit « gérer les messages » dans ce salon."),
+            ephemeral=True)
+        return
+    await inter.response.send_message(
+        view=carte("Vider ce salon ?",
+                   [f"Jusqu'à **{nombre}** messages de <#{inter.channel.id}> vont être "
+                    f"supprimés. Les messages **épinglés** (panneau, tableaux) sont gardés.",
+                    "-# Les messages de plus de 14 jours partent un par un : c'est "
+                    "plus lent."],
+                   "alerte",
+                   boutons=[_b(f"Oui, supprimer jusqu'à {nombre}", "clear", "go", nombre,
+                               style="rouge", emoji="🧹"),
+                            _b("Annuler", "clear", "non", emoji="✋")],
+                   pied=False),
+        ephemeral=True)
 
 
 @bot.tree.command(name="meteo", description="Le temps qu'il fera, et s'il faut un parapluie")

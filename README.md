@@ -171,7 +171,9 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
 | `/comparer [quand]` | **cette semaine contre la précédente** : heures, séances, trous, devoirs à rendre, et ce qui bouge matière par matière |
 | `/examens` | **compte à rebours** avant chaque examen — ceux de CELCAT et ceux de ton carnet réunis — et le temps libre pour réviser d'ici le premier |
-| `/prediction` | les paris de l'assistant 🎲 : le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie… des vrais chiffres, des fausses cotes |
+| `/prediction` | **vos prédictions** 🔮 : « Kevin va valider l'année », « le cours de VBA de jeudi va sauter »… chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
+| `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise |
+| `/clear [nombre]` | vider le salon, après confirmation — **les messages épinglés sont gardés** (panneau, tableaux). Droit « gérer les messages » requis |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |
 | `/panneau` | épingle un panneau de boutons et un menu « voir un jour de la semaine » — tout ça sans rien taper |
@@ -462,6 +464,7 @@ systemctl --user stop assistant-cyu
 | `devoirs.py` | le carnet de devoirs et ses échéances « prochain cours de X » |
 | `meteo.py` | la météo Open-Meteo : le temps de ton trajet, le parapluie, la marge de pluie |
 | `stats.py` | ce que pèse une semaine : heures, matières, trous, archive des semaines |
+| `predictions.py` | le jeu des prédictions : votes, tranchage par l'auteur, classement |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |
 | `assistant.py` | le daemon et la ligne de commande |
@@ -473,7 +476,7 @@ systemctl --user stop assistant-cyu
 | `assistant-cyu.service` | l'unité systemd du bot |
 | `uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
 | `requirements.txt` | les dépendances Python — **discord.py 2.7 au minimum** pour les cartes |
-| `donnees/` | cache, devoirs, état — local, jamais sur GitHub |
+| `donnees/` | cache, devoirs, prédictions, état — local, jamais sur GitHub |
 
 ---
 
