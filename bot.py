@@ -1057,6 +1057,38 @@ def _peut_nettoyer(inter):
     return bool(droits.manage_messages or droits.administrator)
 
 
+def _est_panneau(message):
+    """Ce message est-il un panneau de l'assistant ? On le reconnait a ses
+    boutons (« cyu:pan:… »), pas a son epingle : si le bot n'a pas eu le droit
+    d'epingler, le panneau n'est pas epingle, et /clear l'effacerait."""
+    def parcourir(composants):
+        for c in composants or ():
+            if str(getattr(c, "custom_id", "") or "").startswith("cyu:pan:"):
+                return True
+            if parcourir(getattr(c, "children", None)):
+                return True
+            accessoire = getattr(c, "accessory", None)
+            if accessoire is not None and parcourir([accessoire]):
+                return True
+        return False
+    return parcourir(getattr(message, "components", None))
+
+
+def _droits_manquants(inter):
+    """Ce qui manque AU BOT dans ce salon pour vider : la liste des droits,
+    en francais, tels qu'ils s'appellent dans Discord. Vide si tout va bien."""
+    moi = getattr(inter.guild, "me", None)
+    if moi is None or not hasattr(inter.channel, "permissions_for"):
+        return []
+    droits = inter.channel.permissions_for(moi)
+    manquants = []
+    if not droits.manage_messages:
+        manquants.append("Gérer les messages")
+    if not droits.read_message_history:
+        manquants.append("Lire l'historique des messages")
+    return manquants
+
+
 async def _nettoyer(inter, args):
     """La confirmation de /clear a ete cliquee : on vide, ou on annule."""
     if args[:1] != ["go"]:
@@ -1069,23 +1101,33 @@ async def _nettoyer(inter, args):
         return
     nombre = int(args[1]) if len(args) > 1 and args[1].isdigit() else 100
     nombre = max(1, min(nombre, CLEAR_MAX))
+    manquants = _droits_manquants(inter)
+    if manquants:
+        await inter.response.edit_message(view=ui.erreur(
+            "Il manque au **bot** (pas à toi) : " + ", ".join(f"« {d} »" for d in manquants)
+            + ".\n-# Paramètres du serveur → Rôles → le rôle du bot → Permissions. "
+              "Si ce salon a ses propres permissions, c'est là qu'il faut regarder "
+              "(salon → Modifier → Permissions).",
+            "Le bot n'a pas le droit"), attachments=[])
+        return
     await inter.response.defer()
     if not hasattr(inter.channel, "purge"):
         await inter.edit_original_response(view=ui.erreur("Ce type de salon ne se vide pas."))
         return
     try:
-        # Les epingles sont gardees : le panneau et les tableaux vivants en
-        # font partie, et les effacer serait le meilleur moyen de tout casser.
-        supprimes = await inter.channel.purge(limit=nombre, check=lambda m: not m.pinned,
-                                              bulk=True)
+        # Les epingles sont gardees, et le panneau aussi meme s'il n'est pas
+        # epingle : les effacer serait le meilleur moyen de tout casser.
+        supprimes = await inter.channel.purge(
+            limit=nombre, check=lambda m: not m.pinned and not _est_panneau(m), bulk=True)
     except discord.Forbidden:
         await inter.edit_original_response(view=ui.erreur(
-            "Le bot n'a pas le droit « gérer les messages » dans ce salon."))
+            "Discord a refusé : le bot n'a pas le droit « Gérer les messages » ou "
+            "« Lire l'historique des messages » dans ce salon."))
         return
     n = len(supprimes)
     await inter.edit_original_response(view=carte(
         "Salon vidé", [f"**{n}** message{'s' if n > 1 else ''} supprimé{'s' if n > 1 else ''}.",
-                       "-# Les messages épinglés ont été gardés."
+                       "-# Les messages épinglés et le panneau ont été gardés."
                        + (f" Il en restait peut-être plus que {nombre} : relance "
                           f"/clear." if n >= nombre else "")],
         "calme", pied=False))
@@ -1859,7 +1901,16 @@ async def cmd_panneau(inter: discord.Interaction):
         message = await inter.original_response()
         await message.pin()
     except discord.HTTPException:
-        pass
+        # Sans « Gerer les messages », pas d'epingle : on le dit, sinon on
+        # decouvre le probleme le jour ou le panneau a disparu.
+        try:
+            await inter.followup.send(
+                "⚠️ Le panneau est posté mais **pas épinglé** : le bot n'a pas le droit "
+                "« Gérer les messages » dans ce salon. Donne-le-lui (Paramètres du "
+                "serveur → Rôles → le rôle du bot), puis refais `/panneau`.",
+                ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 @bot.tree.command(name="help", description="Toutes les commandes de l'assistant")

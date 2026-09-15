@@ -261,7 +261,10 @@ n'apparaît**. Si ton bot est déjà invité sans ce scope, réouvre simplement 
 URL : ça complète l'autorisation sans le faire quitter le serveur.
 
 Permissions : voir les salons, gérer les salons, envoyer des messages, joindre
-des fichiers, intégrer des liens, gérer les messages (pour épingler).
+des fichiers, intégrer des liens, lire l'historique des messages, **gérer les
+messages** (pour épingler le panneau, et pour `/clear`). Si un salon a ses
+propres permissions, elles l'emportent sur celles du rôle : c'est là qu'il faut
+regarder quand le bot dit qu'il « n'a pas le droit ».
 
 ### 3. Remplir `config.yaml`
 
