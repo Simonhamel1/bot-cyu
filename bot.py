@@ -353,10 +353,22 @@ def carte_composee(*args, **kw):
 
 # --- Envoyer ou remplacer ----------------------------------------------------
 async def repondre(inter, vue, fichiers=(), ephemere=False):
-    """Un NOUVEAU message, en reponse a une commande ou a un bouton du panneau."""
+    """La reponse a une commande ou a un bouton du panneau.
+
+    REGLE DE L'API DISCORD, apprise a nos depens : apres un `defer`, un
+    followup ne peut porter QUE le drapeau « ephemere » — jamais celui des
+    cartes nouvelle generation. Envoyer une carte par `followup.send` apres
+    un defer est donc refuse, silencieusement pour l'utilisateur (« l'app ne
+    repond pas »). La carte doit passer par la MODIFICATION de la reponse
+    originale, c'est-a-dire du message « reflechit… », qui l'accepte. Le
+    caractere ephemere, lui, est herite du defer : inutile de le redire.
+
+    Sans defer prealable, on repond directement, et la c'est `ephemere` qui
+    decide.
+    """
     fichiers = [f for f in fichiers if f is not None]
     if inter.response.is_done():
-        await inter.followup.send(view=vue, files=fichiers, ephemeral=ephemere)
+        await inter.edit_original_response(view=vue, attachments=fichiers)
     else:
         await inter.response.send_message(view=vue, files=fichiers, ephemeral=ephemere)
 
@@ -1332,14 +1344,18 @@ async def _commande(inter, coroutine, ephemere=False):
 @app_commands.choices(affichage=AFFICHAGE_CHOIX)
 async def cmd_edt(inter: discord.Interaction, quand: str = "",
                   affichage: str = "photo"):
-    await inter.response.defer(thinking=True)
+    # La date est lue AVANT le defer : seule la premiere reponse peut etre
+    # ephemere, et une erreur de saisie n'a rien a faire dans le salon.
+    cours, _ = await _donnees()
     try:
-        vue_, fichiers = await vue_edt(quand, affichage)
+        periode(quand, cours)
     except ValueError as e:
-        await repondre(inter, ui.erreur(f"{e}\n-# Essaie `12/10`, `lundi`, `demain`, "
-                                        f"`la semaine`, `+14`.", "Date incomprise"),
-                       ephemere=True)
+        await inter.response.send_message(
+            view=ui.erreur(f"{e}\n-# Essaie `12/10`, `lundi`, `demain`, `la semaine`, "
+                           f"`+14`.", "Date incomprise"), ephemeral=True)
         return
+    await inter.response.defer(thinking=True)
+    vue_, fichiers = await vue_edt(quand, affichage)
     await repondre(inter, vue_, fichiers)
 
 
@@ -1373,14 +1389,15 @@ async def auto_quand(inter: discord.Interaction, saisie: str):
     du="à partir de quand (aujourd'hui par défaut)",
     au="jusqu'à quand : 12/10 · +21 · vendredi (dans 6 jours par défaut)")
 async def cmd_photo(inter: discord.Interaction, du: str = "", au: str = ""):
-    await inter.response.defer(thinking=True)
     cours, _ = await _donnees()
     try:
         debut = vue.lire_date(du, cours, date.today())
         fin = vue.lire_date(au, cours, debut + timedelta(days=6))
     except ValueError as e:
-        await repondre(inter, ui.erreur(str(e), "Date incomprise"), ephemere=True)
+        await inter.response.send_message(view=ui.erreur(str(e), "Date incomprise"),
+                                          ephemeral=True)
         return
+    await inter.response.defer(thinking=True)
     vue_, fichiers = await vue_grille(debut, fin)
     await repondre(inter, vue_, fichiers)
 
@@ -1509,7 +1526,7 @@ async def cmd_ics(inter: discord.Interaction):
     conteneur.add_item(discord.ui.File("attachment://cyu.ics"))
     vue_ = ui.Carte()
     vue_.add_item(conteneur)
-    await inter.followup.send(view=vue_, files=[fichier], ephemeral=True)
+    await inter.edit_original_response(view=vue_, attachments=[fichier])
 
 
 @bot.tree.command(name="panneau", description="Épingler le panneau de boutons dans ce salon")
@@ -1537,12 +1554,14 @@ async def en_cas_d_erreur(inter: discord.Interaction, err: app_commands.AppComma
     pas » a l'ecran, et rien dans la console."""
     traceback.print_exception(type(err), err, err.__traceback__)
     cause = err.__cause__ or err
-    vue_ = ui.erreur(f"`{type(cause).__name__}` : {cause}"[:1800])
+    texte = f"❌ **Ça n'a pas marché** — `{type(cause).__name__}` : {cause}"[:1800]
     try:
         if inter.response.is_done():
-            await inter.followup.send(view=vue_, ephemeral=True)
+            # Apres un defer, un followup n'accepte que du texte : une carte
+            # serait refusee (voir repondre()).
+            await inter.followup.send(texte, ephemeral=True)
         else:
-            await inter.response.send_message(view=vue_, ephemeral=True)
+            await inter.response.send_message(view=ui.erreur(texte), ephemeral=True)
     except discord.HTTPException:
         pass
 
