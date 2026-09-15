@@ -1415,9 +1415,29 @@ class ModaleDevoir(discord.ui.Modal, title="Nouveau devoir"):
 #   * le PANNEAU (pan, jour) envoie un nouveau message, visible de toi seul —
 #     le panneau, lui, doit rester intact.
 async def agir(inter, action, args, valeurs=()):
-    args = list(args)
-    valeurs = list(valeurs)
+    """Un clic. Tout ce qui echoue ici est MONTRE : en message prive a celui
+    qui a clique (avec le code HTTP et l'action, pour pouvoir le rapporter),
+    et en trace complete dans la console. Un bouton muet est pire qu'un
+    bouton qui explique."""
+    try:
+        await _agir(inter, list(args), list(valeurs), action)
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        print(f"[!] bouton {action}:{':'.join(str(a) for a in args)} :", flush=True)
+        traceback.print_exc()
+        texte = f"❌ **Ça n'a pas marché** — `{type(e).__name__}` : {str(e)[:700]}"
+        if isinstance(e, discord.HTTPException):
+            texte += f"\n-# HTTP {e.status} · code {e.code}"
+        texte += f"\n-# action `{action}:{':'.join(str(a) for a in args)}` — envoie ce message à qui s'occupe du bot"
+        try:
+            if inter.response.is_done():
+                await inter.followup.send(texte[:1900], ephemeral=True)
+            else:
+                await inter.response.send_message(texte[:1900], ephemeral=True)
+        except discord.HTTPException:
+            pass
 
+
+async def _agir(inter, args, valeurs, action):
     if action == "dev" and args[:1] == ["ajout"]:
         await inter.response.send_modal(ModaleDevoir(args[1] if len(args) > 1 else "devoir"))
         return
@@ -1434,8 +1454,18 @@ async def agir(inter, action, args, valeurs=()):
         await repondre(inter, vue_, fichiers, ephemere=True)
         return
 
-    # Navigation : on accuse reception tout de suite (l'image peut prendre une
-    # seconde), puis on reecrit le message sur place.
+    # Navigation sur une carte EPHEMERE (celle du panneau) : on ne modifie pas
+    # ses pieces jointes en place, on repond par une nouvelle carte, elle
+    # aussi ephemere. Seul celui qui clique la voit : rien ne s'encombre.
+    ephemere = bool(inter.message is not None and inter.message.flags.ephemeral)
+    if ephemere:
+        await inter.response.defer(ephemeral=True, thinking=True)
+        vue_, fichiers = await _vue_navigation(action, args, valeurs, inter)
+        await repondre(inter, vue_, fichiers, ephemere=True)
+        return
+
+    # Navigation sur une carte publique : on accuse reception tout de suite
+    # (l'image peut prendre une seconde), puis on reecrit le message sur place.
     await inter.response.defer()
     vue_, fichiers = await _vue_navigation(action, args, valeurs, inter)
     await remplacer(inter, vue_, fichiers)
