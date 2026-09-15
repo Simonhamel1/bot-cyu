@@ -252,13 +252,17 @@ Sur [discord.com/developers/applications](https://discord.com/developers/applica
 3. Ouvre cette URL en remplaçant `TON_APP_ID` :
 
 ```text
-https://discord.com/oauth2/authorize?client_id=TON_APP_ID&scope=bot+applications.commands&permissions=19456
+https://discord.com/oauth2/authorize?client_id=TON_APP_ID&scope=bot+applications.commands&permissions=125968
 ```
 
 Le `scope=bot+applications.commands` est indispensable. Sans
 `applications.commands`, le bot rejoint le serveur mais **aucune commande slash
-n'apparaît**. Si ton bot est déjà invité sans ce scope, réouvre simplement cette
-URL : ça complète l'autorisation sans le faire quitter le serveur.
+n'apparaît**. Si ton bot est déjà invité sans ce scope ou avec moins de droits,
+**réouvre simplement cette URL** : ça met à jour son rôle sans le faire quitter
+le serveur. (`125968` = la somme des permissions ci-dessous ; une ancienne
+version de ce README disait `19456`, qui n'incluait ni « gérer les messages »
+ni « joindre des fichiers » — d'où un panneau jamais épinglé et un `/clear`
+refusé.)
 
 Permissions : voir les salons, gérer les salons, envoyer des messages, joindre
 des fichiers, intégrer des liens, lire l'historique des messages, **gérer les
