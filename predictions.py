@@ -52,6 +52,9 @@ def _trouver(liste, ident):
     return next((p for p in liste if str(p.get("id")) == str(ident)), None)
 
 
+trouver = _trouver
+
+
 def ajouter(texte, auteur_id, auteur, echeance="", echeance_texte="", mise=""):
     liste = lire()
     p = {

@@ -17,13 +17,24 @@ C'est le fichier a lancer au quotidien. Un seul processus fait les deux choses :
     /devoir             un formulaire pour en ajouter un
     /fait, /supprimer   rayer ou retirer un devoir (avec autocompletion)
     /stats [quand]      ce que pese ta semaine : heures, matieres, trous
+    /comparer, /examens la semaine contre la precedente ; le compte a rebours
+    /prediction, /parier  le jeu de la promo : on parie, on vote, on tranche
+    /sondage            un vrai sondage Discord, resultat annonce a la fin
+    /rappel, /rappels   « demain 9h : rendre le TP », le bot te mentionne
+    /anniversaire(s)    le tien, et les prochains de la promo
     /meteo [jours]      le temps, et s'il faut un parapluie pour ton trajet
     /libre              tes creneaux libres
     /statut             l'assistant tourne-t-il, fraicheur des donnees
     /rafraichir         relire CELCAT tout de suite
     /panneau            epingle le panneau de boutons dans un salon
     /ics                le fichier .ics a importer dans ton agenda
+    /clear              vider un salon (les epingles et le panneau restent)
     /help               l'aide, construite depuis ta config
+
+Et il fait des choses tout seul, en plus du daemon : il poste les rappels a
+l'heure dite, souhaite les anniversaires, annonce le resultat des sondages,
+fait le point des predictions le dimanche, et tient a jour les EVENEMENTS
+Discord du serveur avec les examens (voir la boucle `tic`, en bas).
 
 Comment les reponses sont faites
 --------------------------------
@@ -41,7 +52,7 @@ rien garder en memoire.
 Lancement :
 
     pip install -r requirements.txt
-    python assistant.py salons       # une seule fois, cree les sept salons
+    python assistant.py salons       # une seule fois, cree les salons
     python bot.py
 
 Les commandes slash ne demandent PAS l'intent « contenu des messages ». En
@@ -53,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 import sys
 import threading
@@ -63,18 +75,23 @@ from uuid import uuid4
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 
 import actu
+import anniversaires as an
 import assistant
 import celcat
 import config
 import changements as chg
 import devoirs as dv
+import evenements as ev
 import image as img
 import interface as ui
 import meteo
 import notif
 import predictions as pr
+import rappels as rp
+import sondages as sd
 import stats
 import statut as st
 import vue
@@ -122,6 +139,21 @@ AFFICHAGE_CHOIX = [
     app_commands.Choice(name="photo", value="photo"),
     app_commands.Choice(name="texte", value="texte"),
 ]
+
+DUREE_CHOIX = [app_commands.Choice(name=nom, value=h) for nom, h in sd.DUREES]
+
+QUI_CHOIX = [
+    app_commands.Choice(name="moi seulement", value="moi"),
+    app_commands.Choice(name="tout le salon (@here)", value="here"),
+]
+
+# Ce que /rappel propose pendant la frappe. Le champ reste libre.
+SUGGESTIONS_RAPPEL = ["dans 1h", "dans 2h", "ce soir", "demain 9h", "demain 18h",
+                      "lundi 8h", "vendredi 12h", "dans 3 jours"]
+
+# Les actions qui repondent TOUJOURS en prive, meme depuis une carte publique :
+# la liste de TES rappels n'a rien a faire a la place d'un message de tous.
+ACTIONS_PRIVEES = ("rap", "rapsel", "anniv")
 
 # Ce que /edt propose pendant la frappe. Ce ne sont QUE des suggestions : le
 # champ reste libre, donc « 12/10 » ou « +21 » marchent sans figurer ici.
@@ -261,6 +293,10 @@ class Assistant(discord.Client):
             threading.Thread(target=lancer_daemon, daemon=True,
                              name="daemon-cyu").start()
             print("[i] daemon démarré dans un fil à part")
+        # Ce que le bot fait de lui-meme (rappels, anniversaires, sondages,
+        # evenements) : une boucle asyncio, pas un fil, puisqu'elle parle a
+        # Discord par le client.
+        tic.start()
 
     async def on_ready(self):
         print(f"[i] connecté comme {self.user}", flush=True)
@@ -360,6 +396,16 @@ def carte_composee(*args, **kw):
 
 
 # --- Envoyer ou remplacer ----------------------------------------------------
+async def _salon(ident):
+    """Un salon par son identifiant, meme s'il n'est pas dans le cache (juste
+    apres le demarrage, par exemple). Leve discord.HTTPException s'il n'existe
+    pas ou que le bot ne le voit pas."""
+    salon = bot.get_channel(int(ident))
+    if salon is None:
+        salon = await bot.fetch_channel(int(ident))
+    return salon
+
+
 async def repondre(inter, vue, fichiers=(), ephemere=False):
     """La reponse a une commande ou a un bouton du panneau.
 
@@ -398,6 +444,11 @@ async def remplacer(inter, vue, fichiers=()):
 # =============================================================================
 def _b(libelle, action, *args, style="gris", emoji=None, inactif=False):
     return ui.Bouton(libelle, action, tuple(args), style, emoji, inactif)
+
+
+def _s(n):
+    """Le pluriel, en une lettre."""
+    return "s" if n > 1 else ""
 
 
 # --- Une journee -------------------------------------------------------------
@@ -753,6 +804,8 @@ async def vue_examens():
                _b("Créneaux libres", "libre", 14, emoji="🫧"),
                _b("Devoirs", "dev", "page", 0, emoji="📚"),
                _b("Actualiser", "examens", emoji="🔄")]
+    if config.EVENEMENTS_EXAMENS:
+        boutons.append(_b("Événements Discord", "evenements", emoji="📅"))
     if not liste:
         return carte("Examens", ["Aucun examen connu.",
                                  "-# CELCAT n'en annonce aucun et ton carnet n'en "
@@ -786,6 +839,9 @@ async def vue_examens():
     lignes += ["", f"**D'ici le premier** ({vue.jour_relatif(premier['quand'].date())}) : "
                    f"**{vue.duree_fr(libre)}** de créneaux libres en semaine pour "
                    f"réviser, sans toucher aux week-ends."]
+    if config.EVENEMENTS_EXAMENS:
+        lignes.append("-# 📅 Ils sont aussi dans les **événements du serveur** : clique "
+                      "sur la cloche « intéressé » et Discord te rappelle chacun.")
     teinte = ("alerte" if premier["jours"] <= 1 else
               "devoir" if premier["jours"] <= 7 else "info")
     sous = (f"{len(liste)} à venir · le premier {vue.jour_relatif(premier['quand'].date())}")
@@ -1014,6 +1070,179 @@ async def vue_classement():
     return carte("Classement", lignes, "info", sous_titre=sous, boutons=boutons), []
 
 
+def _barre_votes(oui, non, largeur=12):
+    total = oui + non
+    if not total:
+        return ""
+    plein = int(round(oui / total * largeur))
+    return "▰" * plein + "▱" * (largeur - plein) + f" {oui / total * 100:.0f} % y croient"
+
+
+async def vue_prediction_seule(ident):
+    """UNE prediction, comme un sondage : sa carte a elle, ses boutons de
+    vote, reecrite sur place a chaque clic. C'est ce que /parier poste dans
+    #predictions, et ce qui reste quand elle est tranchee."""
+    liste = await asyncio.to_thread(pr.lire)
+    p = pr.trouver(liste, ident)
+    if p is None:
+        return ui.erreur(f"La prédiction #{ident} n'existe plus.", "Introuvable"), []
+    oui, non = pr.comptes(p)
+    ech = pr.echeance_date(p)
+    sous = [f"par **{p['auteur']}**"]
+    try:
+        sous.append(f"posée le {date.fromisoformat(str(p.get('cree_le', ''))[:10]):%d/%m}")
+    except ValueError:
+        pass
+    if ech:
+        sous.append(f"d'ici le {vue.jour_fr(ech, court=True)}")
+    elif p.get("echeance_texte"):
+        sous.append(f"d'ici « {p['echeance_texte']} »")
+    if p.get("mise"):
+        sous.append(f"mise : {p['mise']}")
+
+    lignes = [f"### « {p['texte']} »", ""]
+    if oui or non:
+        lignes += [f"👍 **{oui}** — {pr.noms(p, 'oui', 6) or '—'}",
+                   f"👎 **{non}** — {pr.noms(p, 'non', 6) or '—'}",
+                   f"-# {_barre_votes(oui, non)}"]
+    else:
+        lignes.append("-# personne n'a encore voté — à toi")
+
+    resultat = p.get("resultat")
+    if resultat:
+        justes = pr.noms(p, resultat, 8)
+        quand = str(p.get("tranche_le", ""))[:10]
+        try:
+            quand = f"le {date.fromisoformat(quand):%d/%m}"
+        except ValueError:
+            quand = ""
+        lignes += ["", f"**Tranchée {quand} par {p['auteur']}** — "
+                       + (f"avaient raison : {justes}" if justes
+                          else "personne n'avait misé du bon côté")]
+        titre = ("✅ Réalisée" if resultat == "oui" else "❌ Ratée") + f" — prédiction #{p['id']}"
+        boutons = [[_b("Toutes les prédictions", "pred", "page", 0, emoji="🔮"),
+                    _b("Classement", "pred", "classement", emoji="🏆"),
+                    _b("Parier", "pred", "ajout", style="vert", emoji="🎲")]]
+        teinte = "cours" if resultat == "oui" else "alerte"
+        pied = "tranchée : les votes sont figés"
+    else:
+        if pr.en_retard(p):
+            lignes += ["", f"⏰ **L'échéance est passée** — {p['auteur']}, tranche : ✔️ ou ✖️"]
+        titre = f"🔮 Prédiction #{p['id']}"
+        boutons = [[_b(f"Oui ({oui})", "pred", "oui", p["id"], "solo", style="vert", emoji="👍"),
+                    _b(f"Non ({non})", "pred", "non", p["id"], "solo", style="rouge", emoji="👎"),
+                    _b("C'est arrivé", "pred", "ok", p["id"], "solo", emoji="✔️"),
+                    _b("Raté", "pred", "ko", p["id"], "solo", emoji="✖️")],
+                   [_b("Toutes les prédictions", "pred", "page", 0, emoji="🔮"),
+                    _b("Classement", "pred", "classement", emoji="🏆"),
+                    _b("Parier", "pred", "ajout", style="vert", emoji="🎲")]]
+        teinte = "devoir" if pr.en_retard(p) else "info"
+        pied = "tout le monde vote, seul l'auteur tranche (✔️ ✖️)"
+    return carte(titre, lignes, teinte, sous_titre=" · ".join(sous),
+                 boutons=boutons, pied=pied), []
+
+
+async def publier_prediction(inter, p):
+    """La carte d'une prediction fraiche : dans #predictions si ce salon est
+    configure et qu'on n'y est pas deja, sinon la ou on est. Repond a
+    l'interaction dans les deux cas."""
+    vue_, _ = await vue_prediction_seule(p["id"])
+    salon_id = config.salon_bot("predictions")
+    ici = inter.channel.id if inter.channel is not None else None
+    if salon_id and salon_id != ici:
+        try:
+            salon = await _salon(salon_id)
+            message = await salon.send(view=vue_)
+        except discord.HTTPException as e:
+            print(f"[!] impossible de poster dans #predictions ({salon_id}) : {e}",
+                  flush=True)
+        else:
+            await inter.response.send_message(view=carte(
+                "Prédiction postée 🔮",
+                [f"Elle est dans <#{salon_id}>, avec ses boutons de vote : "
+                 f"{message.jump_url}",
+                 "-# Tout le monde vote 👍 👎, et c'est toi qui tranches le jour venu."],
+                "info", boutons=[_b("Toutes les prédictions", "pred", "page", 0, emoji="🔮")],
+                pied=False), ephemeral=True)
+            return
+    await inter.response.send_message(view=vue_)
+
+
+async def _apres_tranchage(p, etat, inter):
+    """Apres un ✔️ / ✖️ : le refus a celui qui a clique si ce n'est pas son
+    pari, ou l'annonce dans #predictions quand ca s'est passe ailleurs.
+    Toujours apres un defer : un followup, en texte."""
+    if inter is None or p is None:
+        return
+    if etat == "pas_auteur":
+        await inter.followup.send(f"Seul·e **{p['auteur']}** peut trancher la prédiction "
+                                  f"#{p['id']} : c'est son pari.", ephemeral=True)
+        return
+    if etat == "deja":
+        await inter.followup.send(f"La prédiction #{p['id']} est déjà tranchée.",
+                                  ephemeral=True)
+        return
+    if etat != "ok":
+        return
+    salon_id = config.salon_bot("predictions")
+    if not salon_id or (inter.channel is not None and inter.channel.id == salon_id):
+        return
+    realisee = p.get("resultat") == "oui"
+    justes = pr.noms(p, p.get("resultat"), 8)
+    try:
+        salon = await _salon(salon_id)
+        await salon.send(view=carte(
+            ("✅ Réalisée" if realisee else "❌ Ratée") + f" — prédiction #{p['id']}",
+            [f"« {p['texte']} » — de **{p['auteur']}**",
+             f"-# avaient raison : {justes}" if justes
+             else "-# personne n'avait misé du bon côté"],
+            "cours" if realisee else "alerte",
+            boutons=[_b("Classement", "pred", "classement", emoji="🏆"),
+                     _b("Parier", "pred", "ajout", style="vert", emoji="🎲")],
+            pied=False))
+    except discord.HTTPException as e:
+        print(f"[!] annonce dans #predictions impossible : {e}", flush=True)
+
+
+def vue_recap_predictions(liste):
+    """Le point du dimanche dans #predictions. Rend (carte, [auteurs a
+    mentionner]) : ceux qui ont une prediction a trancher."""
+    ouvertes = pr.ouvertes(liste)
+    retard = [p for p in ouvertes if pr.en_retard(p)]
+    prophetes, parieurs, chiffres = pr.classement(liste)
+    lignes, mentions = [], []
+    if retard:
+        lignes += ["### ⏰ À trancher",
+                   "-# l'échéance est passée : l'auteur dit si c'est arrivé (✔️ ✖️)"]
+        for p in retard[:8]:
+            lignes.append(f"• **#{p['id']}** « {p['texte'][:80]} » — <@{p['auteur_id']}>")
+            mentions.append(str(p["auteur_id"]))
+        lignes.append("")
+    if ouvertes:
+        lignes.append(f"### 🔮 {len(ouvertes)} en jeu")
+        for p in sorted(ouvertes, key=lambda p: -sum(pr.comptes(p)))[:5]:
+            oui, non = pr.comptes(p)
+            lignes.append(f"• « {p['texte'][:80]} » — {p['auteur']} · 👍 {oui} · 👎 {non}")
+        lignes.append("")
+    if prophetes or parieurs:
+        lignes.append("### 🏆 Le classement")
+        for m, (nom, ok, n) in zip(("🥇", "🥈", "🥉"), prophetes[:3]):
+            lignes.append(f"{m} **{nom}** — {ok}/{n} réalisée{'s' if ok > 1 else ''}")
+        if parieurs:
+            nom, ok, n = parieurs[0]
+            lignes.append(f"🎯 Meilleur parieur : **{nom}** — {ok}/{n} vote"
+                          f"{'s' if n > 1 else ''} juste{'s' if ok > 1 else ''}")
+    if not lignes:
+        lignes = ["Rien en jeu cette semaine. Quelqu'un ose ? 🎲"]
+    boutons = [_b("Parier", "pred", "ajout", style="vert", emoji="🎲"),
+               _b("Toutes les prédictions", "pred", "page", 0, emoji="🔮"),
+               _b("Classement", "pred", "classement", emoji="🏆")]
+    sous = (f"{chiffres['ouvertes']} en jeu · {chiffres['tranchees']} "
+            f"tranchée{'s' if chiffres['tranchees'] > 1 else ''}")
+    return carte("Le point du dimanche", lignes, "info", sous_titre=sous,
+                 boutons=boutons, pied="on vote, l'auteur tranche, le classement juge"), mentions
+
+
 class ModalePrediction(discord.ui.Modal, title="Une prédiction"):
     texte = discord.ui.Label(
         text="Ta prédiction",
@@ -1040,11 +1269,269 @@ class ModalePrediction(discord.ui.Modal, title="Une prédiction"):
                 echeance = dv.resoudre_echeance(pour, cours, "") or ""
             except ValueError:
                 echeance_texte = pour        # « la fin de l'annee » : on garde tel quel
-        await asyncio.to_thread(pr.ajouter, texte, inter.user.id,
-                                inter.user.display_name, echeance, echeance_texte, mise)
-        # Publique : une prediction est faite pour etre vue, et votee.
-        vue_, _ = await vue_predictions(0)
-        await inter.response.send_message(view=vue_)
+        p = await asyncio.to_thread(pr.ajouter, texte, inter.user.id,
+                                    inter.user.display_name, echeance, echeance_texte, mise)
+        # Publique, et sur sa propre carte : une prediction est faite pour
+        # etre vue et votee, comme un sondage.
+        await publier_prediction(inter, p)
+
+
+# --- Les sondages ------------------------------------------------------------
+async def creer_sondage(inter, question, texte_reponses, heures, plusieurs):
+    """Un vrai sondage Discord, envoye en reponse a l'interaction, et retenu
+    pour en annoncer le resultat a la fin (voir _tic_sondages)."""
+    try:
+        sondage = sd.construire(question, texte_reponses, heures, plusieurs)
+    except ValueError as e:
+        await inter.response.send_message(view=ui.erreur(str(e), "Sondage impossible"),
+                                          ephemeral=True)
+        return
+    heures = min(768, max(1, int(heures or config.SONDAGE_DUREE_HEURES)))
+    fin = datetime.now() + timedelta(hours=heures)
+    contenu = (f"📊 **Sondage** de {inter.user.mention} · {sd.duree_texte(heures)}, "
+               f"se termine {discord.utils.format_dt(fin, 'R')}"
+               + (" · plusieurs réponses possibles" if plusieurs else ""))
+    # Un sondage ne peut pas voyager dans une carte (regle Discord) : c'est un
+    # message ordinaire, et Discord dessine le sondage en dessous.
+    await inter.response.send_message(contenu, poll=sondage,
+                                      allowed_mentions=discord.AllowedMentions.none())
+    try:
+        message = await inter.original_response()
+    except discord.HTTPException:
+        return
+    await asyncio.to_thread(sd.suivre, message.id, inter.channel_id, fin,
+                            sondage.question, inter.user.id)
+
+
+class ModaleSondage(discord.ui.Modal, title="Un sondage"):
+    question = discord.ui.Label(
+        text="La question",
+        component=discord.ui.TextInput(max_length=sd.QUESTION_MAX,
+                                       placeholder="On mange où jeudi ?"))
+    reponses = discord.ui.Label(
+        text="Les réponses",
+        description="une par ligne, ou séparées par « ; » — vide = 👍 Oui / 👎 Non",
+        component=discord.ui.TextInput(style=discord.TextStyle.paragraph, required=False,
+                                       max_length=600,
+                                       placeholder="🍕 Pizza ; 🍔 Burger ; 🥗 Salade"))
+    duree = discord.ui.Label(
+        text="Durée",
+        component=discord.ui.Select(
+            options=[discord.SelectOption(label=nom, value=str(h),
+                                          default=h == config.SONDAGE_DUREE_HEURES)
+                     for nom, h in sd.DUREES],
+            min_values=0, max_values=1))
+    plusieurs = discord.ui.Label(
+        text="Plusieurs réponses par personne ?",
+        component=discord.ui.Select(
+            options=[discord.SelectOption(label="Non, une seule", value="non", default=True),
+                     discord.SelectOption(label="Oui, plusieurs", value="oui")],
+            min_values=0, max_values=1))
+
+    async def on_submit(self, inter: discord.Interaction):
+        heures = int((self.duree.component.values or [str(config.SONDAGE_DUREE_HEURES)])[0])
+        plusieurs = (self.plusieurs.component.values or ["non"])[0] == "oui"
+        await creer_sondage(inter, str(self.question.component.value),
+                            str(self.reponses.component.value or ""), heures, plusieurs)
+
+
+# --- Les rappels -------------------------------------------------------------
+async def poser_rappel(inter, quand, texte, qui="moi"):
+    cours, _ = await _donnees()
+    try:
+        moment = rp.lire_moment(quand, cours)
+    except ValueError as e:
+        await inter.response.send_message(view=ui.erreur(str(e), "Quand ?"), ephemeral=True)
+        return
+    texte = str(texte or "").strip()
+    if not texte:
+        await inter.response.send_message(
+            view=ui.erreur("Un rappel de quoi ? Il manque le texte."), ephemeral=True)
+        return
+    salon_id = inter.channel_id
+    r = await asyncio.to_thread(rp.ajouter, texte, moment, inter.user.id,
+                                inter.user.display_name, salon_id, qui)
+    lignes = [f"**{texte}**",
+              f"-# {vue.jour_fr(moment.date())} à **{moment:%H:%M}** · "
+              f"{vue.compte_a_rebours(moment)} · "
+              + ("tout le salon sera prévenu (@here)" if qui == "here"
+                 else "toi seul seras mentionné")]
+    # Un rappel pour tout le monde s'annonce a tout le monde ; le tien ne
+    # regarde que toi.
+    await inter.response.send_message(view=carte(
+        "Rappel posé ⏰", lignes, "devoir", sous_titre=f"ici, dans <#{salon_id}>",
+        boutons=[_b("Mes rappels", "rap", "liste", emoji="📋"),
+                 _b("Annuler celui-ci", "rap", "suppr", r["id"], emoji="🗑️")],
+        pied=False), ephemeral=qui != "here")
+
+
+async def vue_rappels(user_id, nom=""):
+    liste = await asyncio.to_thread(rp.de, user_id)
+    boutons = [_b("Nouveau rappel", "rap", "ajout", style="vert", emoji="⏰"),
+               _b("Actualiser", "rap", "liste", emoji="🔄")]
+    if not liste:
+        return carte("Tes rappels", ["Aucun rappel en attente.",
+                                     "-# `/rappel quand:demain 9h texte:rendre le TP` "
+                                     "— ou le bouton ci-dessous."],
+                     "calme", boutons=boutons), []
+    lignes, options = [], []
+    for r in liste[:15]:
+        q = rp.quand(r)
+        quand = (f"{vue.jour_fr(q.date(), court=True)} {q:%H:%M} · {vue.compte_a_rebours(q)}"
+                 if q else "?")
+        ou = f" · <#{r['salon_id']}>" if str(r.get("salon_id", "")).isdigit() else ""
+        qui = " · @here" if r.get("qui") == "here" else ""
+        lignes.append(f"⏰ **{r['texte']}**\n-# #{r['id']} · {quand}{ou}{qui}")
+        options.append((f"#{r['id']} {r['texte']}"[:100], str(r["id"]), quand[:100], "🗑️"))
+    menu = ui.Menu("rapsel", "Annuler un rappel…", options[:25])
+    return carte("Tes rappels", lignes, "devoir",
+                 sous_titre=f"{len(liste)} en attente" + (f" — {nom}" if nom else ""),
+                 boutons=boutons, menus=[menu], pied="toi seul vois cette liste"), []
+
+
+class ModaleRappel(discord.ui.Modal, title="Un rappel"):
+    quand = discord.ui.Label(
+        text="Quand ?",
+        description="demain 9h · dans 2h · lundi 14h · 12/10 8h30 · ce soir",
+        component=discord.ui.TextInput(max_length=40, placeholder="demain 9h"))
+    texte = discord.ui.Label(
+        text="De quoi ?",
+        component=discord.ui.TextInput(style=discord.TextStyle.paragraph, max_length=400,
+                                       placeholder="rendre le TP de VBA"))
+    qui = discord.ui.Label(
+        text="Qui prévenir ?",
+        component=discord.ui.Select(
+            options=[discord.SelectOption(label="Moi seulement", value="moi", default=True),
+                     discord.SelectOption(label="Tout le salon (@here)", value="here")],
+            min_values=0, max_values=1))
+
+    async def on_submit(self, inter: discord.Interaction):
+        await poser_rappel(inter, str(self.quand.component.value),
+                           str(self.texte.component.value),
+                           (self.qui.component.values or ["moi"])[0])
+
+
+# --- Les anniversaires -------------------------------------------------------
+async def vue_anniversaires(user_id=None):
+    data = await asyncio.to_thread(an.lire)
+    auj = date.today()
+    liste = an.prochains(12, auj, data)
+    boutons = [_b("Ajouter le mien", "anniv", "ajout", style="vert", emoji="🎂")]
+    if user_id is not None and str(user_id) in data:
+        boutons.append(_b("Retirer le mien", "anniv", "retirer", emoji="🗑️"))
+    boutons.append(_b("Actualiser", "anniv", "liste", emoji="🔄"))
+    pied = (f"le bot les souhaite à {config.ANNIVERSAIRES_HEURE} dans #annonces"
+            if config.ANNIVERSAIRES else "les vœux automatiques sont désactivés")
+    if not liste:
+        return carte("Anniversaires", ["Personne n'a encore donné le sien.",
+                                       "-# `/anniversaire quand:12/10` — et le bot le "
+                                       "souhaite le jour J."],
+                     "calme", boutons=boutons, pied=pied), []
+    lignes = []
+    for d, uid, e in liste:
+        ecart = (d - auj).days
+        age = an.age_le(e, d)
+        quand = ("**AUJOURD'HUI** 🎉" if ecart == 0 else "**demain**" if ecart == 1
+                 else f"dans {ecart} j")
+        lignes.append(f"🎂 **{e['nom']}** — {an.libelle(e)} · {quand}"
+                      + (f" · {age} ans" if age else ""))
+    return carte("Anniversaires", lignes, "info",
+                 sous_titre=f"{len(data)} dans la promo · les prochains",
+                 boutons=boutons, pied=pied), []
+
+
+async def definir_anniversaire(inter, texte):
+    try:
+        jour, mois, annee = an.lire_date(texte)
+    except ValueError as e:
+        await inter.response.send_message(view=ui.erreur(str(e), "Date incomprise"),
+                                          ephemeral=True)
+        return
+    e = await asyncio.to_thread(an.definir, inter.user.id, inter.user.display_name,
+                                jour, mois, annee)
+    d = an.prochaine_date(e)
+    ecart = (d - date.today()).days
+    age = an.age_le(e, d)
+    quand = "c'est aujourd'hui ! 🎉" if ecart == 0 else f"dans {ecart} jour{'s' if ecart > 1 else ''}"
+    lignes = [f"**{e['nom']}** — {an.libelle(e)}, {quand}" + (f" ({age} ans)" if age else "")]
+    if config.ANNIVERSAIRES:
+        lignes.append(f"-# Le bot le souhaitera à {config.ANNIVERSAIRES_HEURE} dans #annonces.")
+    await inter.response.send_message(view=carte(
+        "Anniversaire noté 🎂", lignes, "info",
+        boutons=[_b("Les prochains", "anniv", "liste", emoji="🎂")], pied=False))
+
+
+class ModaleAnniversaire(discord.ui.Modal, title="Ton anniversaire"):
+    quand = discord.ui.Label(
+        text="Ta date de naissance",
+        description="12/10 — ou 12/10/2005 pour que le bot dise ton âge",
+        component=discord.ui.TextInput(max_length=30, placeholder="12/10/2005"))
+
+    async def on_submit(self, inter: discord.Interaction):
+        await definir_anniversaire(inter, str(self.quand.component.value))
+
+
+# --- Les examens en evenements Discord ---------------------------------------
+def _serveur():
+    """Le serveur de la promo : celui d'un salon configure, sinon le seul ou
+    le bot se trouve. None si on ne peut pas trancher."""
+    for canal in ("commandes", "predictions", "annonces", "devoirs", "alertes", "edt"):
+        ident = config.salon_bot(canal)
+        salon = bot.get_channel(ident) if ident else None
+        if salon is not None and getattr(salon, "guild", None) is not None:
+            return salon.guild
+    if config.SERVEUR_ID.isdigit():
+        serveur = bot.get_guild(int(config.SERVEUR_ID))
+        if serveur is not None:
+            return serveur
+    return bot.guilds[0] if len(bot.guilds) == 1 else None
+
+
+async def synchroniser_evenements(serveur):
+    """Cree, met a jour et retire les evenements Discord pour que le
+    calendrier du serveur dise la meme chose que CELCAT et le carnet.
+    Rend (crees, mis_a_jour, retires). Leve discord.Forbidden si le bot n'a
+    pas « Gerer les evenements »."""
+    cours, liste_devoirs = await _donnees()
+    voulus = await asyncio.to_thread(ev.voulus, cours, liste_devoirs)
+    connus = await asyncio.to_thread(ev.lire)
+    a_creer, a_modifier, a_retirer = ev.plan(voulus, connus)
+    crees = maj = retires = 0
+
+    for cle in a_modifier:
+        e = voulus[cle]
+        try:
+            obj = await serveur.fetch_scheduled_event(int(connus[cle]["id"]))
+            await obj.edit(name=e["nom"], start_time=e["debut"], end_time=e["fin"],
+                           location=e["lieu"], description=e["description"])
+        except discord.NotFound:
+            a_creer.append(cle)              # supprime a la main : on le refait
+            continue
+        connus[cle] = {"id": connus[cle]["id"], "empreinte": e["empreinte"]}
+        maj += 1
+
+    for cle in a_creer:
+        e = voulus[cle]
+        obj = await serveur.create_scheduled_event(
+            name=e["nom"], start_time=e["debut"], end_time=e["fin"],
+            entity_type=discord.EntityType.external,
+            privacy_level=discord.PrivacyLevel.guild_only,
+            location=e["lieu"], description=e["description"],
+            reason="examen connu de l'assistant CYU")
+        connus[cle] = {"id": str(obj.id), "empreinte": e["empreinte"]}
+        crees += 1
+
+    for cle in a_retirer:
+        try:
+            obj = await serveur.fetch_scheduled_event(int(connus[cle]["id"]))
+            await obj.delete(reason="examen disparu de CELCAT ou du carnet")
+        except discord.NotFound:
+            pass                              # deja parti : c'est le but
+        connus.pop(cle, None)
+        retires += 1
+
+    await asyncio.to_thread(ev.ecrire, connus)
+    return crees, maj, retires
 
 
 # --- /clear : vider un salon -------------------------------------------------
@@ -1219,14 +1706,27 @@ async def vue_statut():
         traceback.print_exc()
         lignes = [f"⚠️ le panneau d'état a échoué : `{type(e).__name__}: {e}`"[:300]]
     lignes += ["", "**Le daemon** — " + ("🟢 actif" if vivant else "🔴 ARRÊTÉ")
-               + ("" if AVEC_DAEMON else " (AVEC_DAEMON = False dans bot.py)"),
-               "", "**Les salons**"]
+               + ("" if AVEC_DAEMON else " (AVEC_DAEMON = False dans bot.py)")]
+    try:
+        n_r, n_s, n_e, n_a = await asyncio.to_thread(
+            lambda: (len(rp.lire()), len(sd.lire()), len(ev.lire()), len(an.lire())))
+        lignes.append(f"**La promo** — {n_r} rappel{_s(n_r)} en attente · {n_s} sondage"
+                      f"{_s(n_s)} suivi{_s(n_s)} · {n_e} examen{_s(n_e)} en événements · "
+                      f"{n_a} anniversaire{_s(n_a)} noté{_s(n_a)}"
+                      + ("" if tic.is_running() else " · ⚠️ la boucle du bot est arrêtée"))
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        lignes.append(f"**La promo** — ⚠️ `{type(e).__name__}: {e}`"[:300])
+    lignes += ["", "**Les salons**"]
     for canal in config.CANAUX:
         mode, cible = notif.destination(canal)
-        ou = f"<#{cible}>" if mode == "bot" else "webhook"
-        if not notif.salon_configure(canal):
-            ou += " ⚠️ non configuré, retombe sur le secours"
-        lignes.append(f"`{canal:10s}` {ou}")
+        if canal in config.CANAUX_BOT_SEULEMENT:
+            ou = (f"<#{cible}>" if config.salon_bot(canal)
+                  else "— pas de salon dédié (les prédictions restent où on les pose)")
+        else:
+            ou = f"<#{cible}>" if mode == "bot" else "webhook"
+            if not notif.salon_configure(canal):
+                ou += " ⚠️ non configuré, retombe sur le secours"
+        lignes.append(f"`{canal:11s}` {ou}")
     boutons = [_b("Relire CELCAT", "pan", "refresh", style="bleu", emoji="🔄"),
                _b("Actualiser", "pan", "statut", emoji="🔁")]
     return carte("État de l'assistant", lignes, "alerte" if not vivant else "statut",
@@ -1255,7 +1755,7 @@ def vue_panneau():
              "visibles que par toi, et chacune a ses propres boutons pour "
              "naviguer.",
              "-# Tu peux aussi taper les commandes : `/edt` `/devoirs` `/stats` "
-             "`/examens` `/meteo` — et `/help` pour tout voir"]
+             "`/examens` `/sondage` `/rappel` — et `/help` pour tout voir"]
     menu = ui.Menu("jour", "Voir un jour de la semaine…",
                    [(j.capitalize(), str(i), None, "📆") for i, j in enumerate(vue.JOURS)]
                    + [("La semaine prochaine", "prochaine", None, "🗓️"),
@@ -1274,6 +1774,11 @@ def vue_panneau():
         [_b("Examens", "pan", "examens", emoji="🎓"),
          _b("Comparer", "pan", "comparer", emoji="⚖️"),
          _b("Prédictions", "pan", "prediction", emoji="🔮"),
+         _b("Parier", "pred", "ajout", style="vert", emoji="🎲"),
+         _b("Sondage", "son", "ajout", style="vert", emoji="📊")],
+        [_b("Rappel", "rap", "ajout", emoji="⏰"),
+         _b("Mes rappels", "pan", "rappels", emoji="📋"),
+         _b("Anniversaires", "pan", "anniv", emoji="🎂"),
          _b("Relire CELCAT", "pan", "refresh", emoji="🔄"),
          _b("État", "pan", "statut", emoji="🩺")],
     ]
@@ -1325,6 +1830,16 @@ def texte_aide():
         "`/clear` — vider ce salon (les épinglés sont gardés) — droit « gérer les "
         "messages » requis",
         "",
+        "### La promo",
+        "`/sondage` — **un vrai sondage Discord** : `question:`, `reponses:` "
+        "(« 🍕 Pizza ; 🍔 Burger », vide = Oui / Non), la durée, plusieurs réponses "
+        "ou pas. **Le résultat est annoncé à la fin**",
+        "`/rappel quand: texte:` — « demain 9h », « dans 2h », « lundi 14h »… le bot "
+        "te mentionne ici à l'heure dite. `qui: tout le salon` pour un @here",
+        "`/rappels` — tes rappels en attente, et de quoi en annuler un",
+        "`/anniversaire quand:12/10` — le tien (avec l'année, il dira ton âge) · "
+        "`/anniversaires` — les prochains de la promo",
+        "",
         "### Les devoirs",
         "`/devoirs` — la liste, **un bouton ✅ par devoir**, un menu pour supprimer",
         "`/devoir` — un formulaire pour en ajouter un",
@@ -1374,6 +1889,19 @@ def texte_aide():
         f"**#statut** — les deux tableaux vivants, réécrits sur place (aucune "
         f"notification)",
     ]
+    if config.ANNIVERSAIRES:
+        lignes.append(f"`{config.ANNIVERSAIRES_HEURE}` **#annonces** — 🎂 joyeux "
+                      f"anniversaire à qui l'a donné avec `/anniversaire`")
+    if config.SONDAGE_RESULTATS:
+        lignes.append("`à la fin de chaque sondage` — 📊 le résultat, en réponse au sondage")
+    if config.EVENEMENTS_EXAMENS:
+        lignes.append("`toutes les heures` — 📅 chaque examen (CELCAT ou carnet) devient "
+                      "un **événement Discord** du serveur, avec sa cloche « intéressé »")
+    if config.RECAP_PREDICTIONS and config.salon_bot("predictions"):
+        lignes.append(f"`{jour_recap} {config.RECAP_SEMAINE_HEURE}` **#predictions** — "
+                      f"🔮 le point : ce qu'il reste à trancher, et le classement")
+    lignes.append("`à l'heure dite` — ⏰ chaque rappel posé avec `/rappel`, là où il "
+                  "a été posé")
     return lignes
 
 
@@ -1481,12 +2009,20 @@ async def agir(inter, action, args, valeurs=()):
             pass
 
 
+# Les boutons qui ouvrent un FORMULAIRE : un formulaire doit etre la premiere
+# reponse a l'interaction, donc pas de defer, pas de carte, rien avant.
+FORMULAIRES = {
+    "dev": lambda args: ModaleDevoir(args[1] if len(args) > 1 else "devoir"),
+    "pred": lambda args: ModalePrediction(),
+    "son": lambda args: ModaleSondage(),
+    "rap": lambda args: ModaleRappel(),
+    "anniv": lambda args: ModaleAnniversaire(),
+}
+
+
 async def _agir(inter, args, valeurs, action):
-    if action == "dev" and args[:1] == ["ajout"]:
-        await inter.response.send_modal(ModaleDevoir(args[1] if len(args) > 1 else "devoir"))
-        return
-    if action == "pred" and args[:1] == ["ajout"]:
-        await inter.response.send_modal(ModalePrediction())
+    if args[:1] == ["ajout"] and action in FORMULAIRES:
+        await inter.response.send_modal(FORMULAIRES[action](args))
         return
     if action == "clear":
         await _nettoyer(inter, args)
@@ -1495,6 +2031,15 @@ async def _agir(inter, args, valeurs, action):
     if action in ("pan", "jour"):
         await inter.response.defer(ephemeral=True, thinking=True)
         vue_, fichiers = await _vue_panneau(args, valeurs, inter)
+        await repondre(inter, vue_, fichiers, ephemere=True)
+        return
+
+    # Ce qui ne regarde que celui qui clique (ses rappels, son anniversaire)
+    # repond en prive, meme depuis une carte publique : on ne remplace pas un
+    # message de tous par la liste de quelqu'un.
+    if action in ACTIONS_PRIVEES:
+        await inter.response.defer(ephemeral=True, thinking=True)
+        vue_, fichiers = await _vue_navigation(action, args, valeurs, inter)
         await repondre(inter, vue_, fichiers, ephemere=True)
         return
 
@@ -1551,6 +2096,11 @@ async def _vue_panneau(args, valeurs, inter=None):
         return await vue_comparer(celcat.semaine_de(auj))
     if quoi == "prediction":
         return await vue_predictions(0)
+    if quoi == "anniv":
+        return await vue_anniversaires(inter.user.id if inter is not None else None)
+    if quoi == "rappels":
+        return await vue_rappels(inter.user.id if inter is not None else 0,
+                                 inter.user.display_name if inter is not None else "")
     if quoi == "refresh":
         return await rafraichir()
     if quoi == "statut":
@@ -1591,12 +2141,28 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         return await vue_paris_assistant()
     if action == "pred":
         quoi = args[0] if args else "page"
+        # « solo » : le bouton est sur la carte d'UNE prediction (celle de
+        # #predictions), pas sur la liste — on reecrit cette carte-la.
+        solo = len(args) > 2 and args[2] == "solo"
         if quoi in ("oui", "non") and len(args) > 1:
             if inter is not None:
                 await asyncio.to_thread(pr.voter, args[1], inter.user.id,
                                         inter.user.display_name, quoi)
+            if solo:
+                return await vue_prediction_seule(args[1])
             page = args[2] if len(args) > 2 else "0"
             return await vue_predictions(int(page) if page.isdigit() else 0)
+        if quoi in ("ok", "ko") and len(args) > 1:
+            if inter is not None:
+                p, etat = await asyncio.to_thread(pr.trancher, args[1],
+                                                  "oui" if quoi == "ok" else "non",
+                                                  inter.user.id)
+                await _apres_tranchage(p, etat, inter)
+            if solo:
+                return await vue_prediction_seule(args[1])
+            return await vue_predictions(0)
+        if quoi == "solo" and len(args) > 1:
+            return await vue_prediction_seule(args[1])
         if quoi == "closes":
             return await vue_predictions_closes()
         if quoi == "classement":
@@ -1604,25 +2170,54 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         page = args[1] if quoi == "page" and len(args) > 1 else "0"
         return await vue_predictions(int(page) if page.lstrip("-").isdigit() else 0)
     if action == "predsel":
-        refus = []
         for valeur in valeurs if inter is not None else []:
             op, _, ident = str(valeur).partition(":")
             if op in ("ok", "ko"):
-                _, etat = await asyncio.to_thread(pr.trancher, ident,
+                p, etat = await asyncio.to_thread(pr.trancher, ident,
                                                   "oui" if op == "ok" else "non",
                                                   inter.user.id)
+                await _apres_tranchage(p, etat, inter)
             elif op == "suppr":
-                _, etat = await asyncio.to_thread(pr.supprimer, ident, inter.user.id)
-            else:
-                continue
-            if etat == "pas_auteur":
-                refus.append(f"#{ident} n'est pas à toi : seul l'auteur tranche ou supprime.")
-            elif etat == "deja":
-                refus.append(f"#{ident} est déjà tranchée.")
-        if refus and inter is not None:
-            # Apres un defer, un followup n'accepte que du texte (voir repondre()).
-            await inter.followup.send("\n".join(refus), ephemeral=True)
+                p, etat = await asyncio.to_thread(pr.supprimer, ident, inter.user.id)
+                if etat == "pas_auteur":
+                    # Apres un defer, un followup n'accepte que du texte.
+                    await inter.followup.send(
+                        f"#{ident} n'est pas à toi : seul l'auteur supprime.", ephemeral=True)
         return await vue_predictions(0)
+    if action == "evenements":
+        if inter is not None and inter.guild is not None and config.EVENEMENTS_EXAMENS:
+            try:
+                crees, maj, retires = await synchroniser_evenements(inter.guild)
+            except discord.Forbidden:
+                texte = ("❌ Le bot n'a pas le droit **« Gérer les événements »** sur ce "
+                         "serveur (Paramètres du serveur → Rôles → le rôle du bot).")
+            else:
+                texte = (f"📅 Événements Discord : **{crees}** créé{_s(crees)}, **{maj}** "
+                         f"mis à jour, **{retires}** retiré{_s(retires)}."
+                         + (" Tout était déjà à jour." if not (crees or maj or retires)
+                            else ""))
+            await inter.followup.send(texte, ephemeral=True)
+        return await vue_examens()
+    if action == "rap":
+        quoi = args[0] if args else "liste"
+        uid = inter.user.id if inter is not None else 0
+        nom = inter.user.display_name if inter is not None else ""
+        if quoi == "suppr" and len(args) > 1 and inter is not None:
+            _, etat = await asyncio.to_thread(rp.supprimer, args[1], uid)
+            if etat == "pas_auteur":
+                await inter.followup.send("Ce rappel n'est pas à toi.", ephemeral=True)
+        return await vue_rappels(uid, nom)
+    if action == "rapsel":
+        uid = inter.user.id if inter is not None else 0
+        for ident in valeurs:
+            await asyncio.to_thread(rp.supprimer, ident, uid)
+        return await vue_rappels(uid, inter.user.display_name if inter is not None else "")
+    if action == "anniv":
+        quoi = args[0] if args else "liste"
+        uid = inter.user.id if inter is not None else None
+        if quoi == "retirer" and uid is not None:
+            await asyncio.to_thread(an.retirer, uid)
+        return await vue_anniversaires(uid)
     if action == "meteo":
         return await vue_meteo(int(args[0]))
     if action == "actu":
@@ -1820,6 +2415,92 @@ async def cmd_parier(inter: discord.Interaction):
     await inter.response.send_modal(ModalePrediction())
 
 
+@bot.tree.command(name="sondage",
+                  description="Un vrai sondage Discord : une question, des réponses, tout le monde vote")
+@app_commands.describe(
+    question="la question",
+    reponses="séparées par « ; » : 🍕 Pizza ; 🍔 Burger — vide = Oui / Non",
+    duree=f"combien de temps il reste ouvert ({sd.duree_texte(config.SONDAGE_DUREE_HEURES)} par défaut)",
+    plusieurs="chacun peut cocher plusieurs réponses")
+@app_commands.choices(duree=DUREE_CHOIX)
+async def cmd_sondage(inter: discord.Interaction, question: str, reponses: str = "",
+                      duree: int = 0, plusieurs: bool = False):
+    await creer_sondage(inter, question, reponses, duree or config.SONDAGE_DUREE_HEURES,
+                        plusieurs)
+
+
+@cmd_sondage.autocomplete("reponses")
+async def auto_reponses(inter: discord.Interaction, saisie: str):
+    """Des jeux de reponses tout prets ; ce que tu tapes reste valable."""
+    bas = celcat.normaliser(saisie)
+    sortie = []
+    if saisie.strip():
+        sortie.append(app_commands.Choice(name=f"➜ {saisie.strip()}"[:100],
+                                          value=saisie.strip()[:100]))
+    for nom, valeur in sd.MODELES:
+        if not bas or bas in celcat.normaliser(nom) or bas in celcat.normaliser(valeur):
+            sortie.append(app_commands.Choice(name=nom, value=valeur))
+    return sortie[:25]
+
+
+@bot.tree.command(name="rappel", description="Rappelle-moi : « demain 9h », « dans 2h », « lundi 14h »…")
+@app_commands.describe(
+    quand="demain 9h · dans 2h · lundi 14h · 12/10 8h30 · ce soir · prochain:maths",
+    texte="de quoi te rappeler",
+    qui="toi seul (par défaut), ou tout le salon avec @here")
+@app_commands.choices(qui=QUI_CHOIX)
+async def cmd_rappel(inter: discord.Interaction, quand: str, texte: str, qui: str = "moi"):
+    await poser_rappel(inter, quand, texte, qui)
+
+
+@cmd_rappel.autocomplete("quand")
+async def auto_rappel_quand(inter: discord.Interaction, saisie: str):
+    sortie = []
+    if saisie.strip():
+        try:
+            moment = rp.lire_moment(saisie)
+            sortie.append(app_commands.Choice(
+                name=f"➜ {vue.jour_fr(moment.date())} à {moment:%H:%M}"[:100],
+                value=saisie.strip()[:100]))
+        except ValueError:
+            pass
+    bas = celcat.normaliser(saisie)
+    for s in SUGGESTIONS_RAPPEL:
+        if not bas or bas in celcat.normaliser(s):
+            sortie.append(app_commands.Choice(name=s, value=s))
+    return sortie[:25]
+
+
+@bot.tree.command(name="rappels", description="Tes rappels en attente")
+async def cmd_rappels(inter: discord.Interaction):
+    await _commande(inter, vue_rappels(inter.user.id, inter.user.display_name),
+                    ephemere=True)
+
+
+@bot.tree.command(name="anniversaire",
+                  description="Donner ton anniversaire : le bot le souhaite le jour J")
+@app_commands.describe(
+    quand="12/10 · 12/10/2005 (avec l'année, il dira ton âge) · 12 octobre",
+    retirer="oui = te retirer de la liste")
+async def cmd_anniversaire(inter: discord.Interaction, quand: str = "", retirer: bool = False):
+    if retirer:
+        ok = await asyncio.to_thread(an.retirer, inter.user.id)
+        await inter.response.send_message(
+            view=carte("Anniversaire retiré" if ok else "Rien à retirer",
+                       ["Tu n'es plus dans la liste." if ok else "Tu n'y étais pas."],
+                       "calme", pied=False), ephemeral=True)
+        return
+    if not quand.strip():
+        await _commande(inter, vue_anniversaires(inter.user.id), ephemere=True)
+        return
+    await definir_anniversaire(inter, quand)
+
+
+@bot.tree.command(name="anniversaires", description="Les prochains anniversaires de la promo")
+async def cmd_anniversaires(inter: discord.Interaction):
+    await _commande(inter, vue_anniversaires(inter.user.id))
+
+
 @bot.tree.command(name="clear", description="Vider ce salon — les messages épinglés sont gardés")
 @app_commands.describe(nombre=f"combien de messages au plus (100 par défaut, {CLEAR_MAX} maximum)")
 @app_commands.default_permissions(manage_messages=True)
@@ -1917,6 +2598,208 @@ async def cmd_panneau(inter: discord.Interaction):
 async def cmd_help(inter: discord.Interaction):
     # Ephemere : l'aide n'a d'interet que pour celui qui la demande.
     await inter.response.send_message(view=vue_aide(), ephemeral=True)
+
+
+# =============================================================================
+# Ce que le bot fait tout seul : la boucle `tic`
+# =============================================================================
+# Le daemon d'assistant.py parle par webhooks et ne connait pas les boutons.
+# Tout ce qui a besoin du CLIENT Discord (une carte a boutons dans un salon,
+# relire un sondage, creer un evenement) passe par ici, toutes les 30 s.
+# Chaque tache est independante : l'une qui echoue n'empeche pas les autres.
+def _etat_bot():
+    try:
+        data = json.loads(config.FICHIER_ETAT_BOT.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def _deja(cle):
+    return cle in (_etat_bot().get("envoyes") or {})
+
+
+def _marquer(cle):
+    """Memorise un envoi (anti-doublon a travers les redemarrages), et purge
+    ce qui a plus de 30 jours."""
+    etat = _etat_bot()
+    envoyes = etat.setdefault("envoyes", {})
+    envoyes[cle] = datetime.now().isoformat(timespec="seconds")
+    limite = (datetime.now() - timedelta(days=30)).isoformat()
+    etat["envoyes"] = {k: v for k, v in envoyes.items() if v >= limite}
+    config.preparer_dossiers()
+    config.FICHIER_ETAT_BOT.write_text(json.dumps(etat, ensure_ascii=False, indent=1),
+                                       encoding="utf-8")
+
+
+async def _tic_rappels(maintenant):
+    """Les rappels dont l'heure est passee : postes la ou ils ont ete poses,
+    en mentionnant qui il faut. Un salon disparu ne bloque pas les autres."""
+    for r in await asyncio.to_thread(rp.echus, maintenant):
+        here = r.get("qui") == "here"
+        mention = "@here" if here else f"<@{r['auteur_id']}>"
+        q = rp.quand(r)
+        lignes = [f"{mention} — **{r['texte']}**",
+                  f"-# rappel posé par {r['auteur']}" + (f" pour {q:%H:%M}" if q else "")]
+        try:
+            salon = await _salon(r["salon_id"])
+            await salon.send(
+                view=carte("⏰ Rappel", lignes, "devoir",
+                           boutons=[_b("Nouveau rappel", "rap", "ajout", style="vert",
+                                       emoji="⏰")], pied=False),
+                allowed_mentions=discord.AllowedMentions(users=True, everyone=here))
+        except discord.HTTPException as e:
+            abandonne = await asyncio.to_thread(rp.echec, r["id"])
+            print(f"[!] rappel #{r['id']} non envoyé ({e})"
+                  f"{' — abandonné' if abandonne else ''}", flush=True)
+            continue
+        await asyncio.to_thread(rp.retirer, r["id"])
+
+
+async def _tic_anniversaires(maintenant):
+    if not config.ANNIVERSAIRES:
+        return
+    moment = vue.a_heure(maintenant.date(), config.ANNIVERSAIRES_HEURE, (8, 0))
+    if not assistant._du(moment, maintenant, fenetre_min=10):
+        return
+    for uid, e in await asyncio.to_thread(an.du_jour, maintenant.date()):
+        cle = f"anniv:{maintenant.date()}:{uid}"
+        if _deja(cle):
+            continue
+        age = an.age_le(e, maintenant.date())
+        corps = [f"C'est l'anniversaire de <@{uid}> aujourd'hui"
+                 + (f" — **{age} ans** !" if age else " !"),
+                 "", "Un petit mot, un gâteau à la pause, une pensée. 🎉"]
+        # Par le daemon-notif (webhook ou bot, selon config) : c'est #annonces,
+        # comme les briefings, et la mention part dans le contenu du message.
+        ok = await asyncio.to_thread(notif.envoyer, "🎂 Joyeux anniversaire !", corps,
+                                     "cours", False, "annonces", None, [uid])
+        if ok:
+            _marquer(cle)
+            print(f"{maintenant:%H:%M} | anniversaire de {e.get('nom')} souhaité", flush=True)
+
+
+async def _tic_sondages(maintenant):
+    """Les sondages du bot dont la fin est passee : on relit le message, et si
+    Discord a clos le sondage, on poste le resultat en reponse."""
+    if not config.SONDAGE_RESULTATS:
+        return
+    for s in await asyncio.to_thread(sd.a_relever, maintenant):
+        try:
+            salon = await _salon(s["salon_id"])
+            message = await salon.fetch_message(int(s["message_id"]))
+        except discord.HTTPException:
+            await asyncio.to_thread(sd.oublier, s["message_id"])     # supprime
+            continue
+        sondage = message.poll
+        if sondage is None:
+            await asyncio.to_thread(sd.oublier, s["message_id"])
+            continue
+        if not sondage.is_finalised():
+            # Discord cloture avec un peu de retard (parfois une heure) : on
+            # relira plus tard, pas a chaque tour, et pas eternellement.
+            if sd.perime(s, maintenant):
+                await asyncio.to_thread(sd.oublier, s["message_id"])
+            else:
+                await asyncio.to_thread(sd.marquer_lecture, s["message_id"], maintenant)
+            continue
+        lignes, gagnant = sd.resultat(sondage)
+        if gagnant:
+            lignes = [f"### 🏆 {gagnant}", ""] + lignes
+        elif sondage.total_votes:
+            lignes = ["### 🤝 Égalité", ""] + lignes
+        n = sondage.total_votes
+        try:
+            await salon.send(
+                view=carte("📊 Résultat du sondage", lignes, "info",
+                           sous_titre=f"« {sondage.question} »",
+                           boutons=[_b("Un autre sondage", "son", "ajout", style="vert",
+                                       emoji="📊")],
+                           pied=f"{n} vote{_s(n)}"),
+                reference=message, mention_author=False)
+        except discord.HTTPException as e:
+            print(f"[!] résultat du sondage {s['message_id']} non posté : {e}", flush=True)
+        await asyncio.to_thread(sd.oublier, s["message_id"])
+
+
+async def _tic_recap_predictions(maintenant):
+    """Le dimanche, dans #predictions : ce qu'il reste a trancher, et le
+    classement. Meme jour et meme heure que le recap de la semaine."""
+    if not config.RECAP_PREDICTIONS:
+        return
+    salon_id = config.salon_bot("predictions")
+    if not salon_id or maintenant.weekday() != config.RECAP_SEMAINE_JOUR:
+        return
+    cle = f"recap-pred:{maintenant.date()}"
+    moment = vue.a_heure(maintenant.date(), config.RECAP_SEMAINE_HEURE, (18, 0))
+    if _deja(cle) or not assistant._du(moment, maintenant, fenetre_min=10):
+        return
+    liste = await asyncio.to_thread(pr.lire)
+    if not liste:
+        _marquer(cle)
+        return
+    vue_, mentions = vue_recap_predictions(liste)
+    salon = await _salon(salon_id)
+    await salon.send(view=vue_, allowed_mentions=discord.AllowedMentions(
+        users=[discord.Object(id=int(u)) for u in mentions if str(u).isdigit()]))
+    _marquer(cle)
+
+
+_DERNIERE_SYNC = [None]
+_EVENEMENTS_REFUSES = [None]
+
+
+async def _tic_evenements(maintenant):
+    """Toutes les heures : les examens dans les evenements du serveur."""
+    if not config.EVENEMENTS_EXAMENS:
+        return
+    derniere = _DERNIERE_SYNC[0]
+    if derniere is not None and maintenant - derniere < timedelta(hours=1):
+        return
+    _DERNIERE_SYNC[0] = maintenant
+    serveur = _serveur()
+    if serveur is None:
+        return
+    try:
+        crees, maj, retires = await synchroniser_evenements(serveur)
+    except discord.Forbidden:
+        # Une fois par jour, pas a chaque heure : le message est le meme.
+        if _EVENEMENTS_REFUSES[0] is None or \
+                maintenant - _EVENEMENTS_REFUSES[0] > timedelta(hours=24):
+            _EVENEMENTS_REFUSES[0] = maintenant
+            print("[!] examens → événements : le bot n'a pas « Gérer les événements »",
+                  flush=True)
+            await asyncio.to_thread(
+                notif.envoyer, "Examens en événements : refusé",
+                ["Le bot n'a pas le droit **« Gérer les événements »** sur le serveur.",
+                 "Donne-le-lui (Paramètres du serveur → Rôles → le rôle du bot), ou "
+                 "mets `classe.evenements_examens: false` dans config.yaml."],
+                "devoir", False, "logs")
+        return
+    if crees or maj or retires:
+        print(f"{maintenant:%H:%M} | événements : {crees} créés, {maj} mis à jour, "
+              f"{retires} retirés", flush=True)
+
+
+TACHES = (("rappels", _tic_rappels), ("anniversaires", _tic_anniversaires),
+          ("sondages", _tic_sondages), ("predictions", _tic_recap_predictions),
+          ("evenements", _tic_evenements))
+
+
+@tasks.loop(seconds=30)
+async def tic():
+    maintenant = datetime.now()
+    for nom, tache in TACHES:
+        try:
+            await tache(maintenant)
+        except Exception:                       # noqa: BLE001 - filet volontaire
+            print(f"[!] tâche « {nom} » :", flush=True)
+            traceback.print_exc()
+
+
+@tic.before_loop
+async def _avant_tic():
+    await bot.wait_until_ready()
 
 
 # --- Erreurs -----------------------------------------------------------------
