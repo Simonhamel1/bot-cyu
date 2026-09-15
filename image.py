@@ -66,13 +66,29 @@ ORANGE = (219, 145, 38)
 
 # Une couleur par type de seance, la meme que la grille en barres de vue.py :
 # une seule grammaire de couleurs a apprendre pour tout le projet.
+#
+# Les teintes ne sont pas choisies a l'oeil : elles passent le test de
+# separation pour les trois formes de daltonisme ET pour une vision normale,
+# sur ce fond sombre. C'est ce qui a fait bouger le TP du turquoise (14, 132,
+# 168) vers le bleu ci-dessous : cote a cote avec le vert des TD, les deux
+# etaient trop proches pour etre distingues de facon fiable.
 COULEURS = {
-    "CM": (59, 102, 214), "TD": (35, 140, 85), "TP": (14, 132, 168),
+    "CM": (59, 102, 214), "TD": (35, 140, 85), "TP": (14, 140, 196),
     "EXAMEN": (196, 52, 58), "EXAM": (196, 52, 58), "DS": (196, 52, 58),
     "CONTROLE": (196, 52, 58), "SOUTENANCE": (196, 52, 58),
     "PROJET": (139, 86, 196), "": (176, 122, 30),
 }
 COULEUR_DISTANCE = (176, 64, 140)
+
+# La meteo est dessinee, jamais ecrite en emoji : sur un serveur ou seule
+# DejaVu est installee, un emoji devient un carre vide (voir _nettoyer).
+SOLEIL = (240, 190, 64)
+NUAGE = (154, 162, 178)
+NUAGE_SOMBRE = (104, 112, 130)
+PLUIE = (86, 158, 232)
+NEIGE = (214, 230, 245)
+ECLAIR = (246, 204, 74)
+BROUILLARD = (138, 146, 162)
 
 # Tout est dessine a cette echelle puis reduit : c'est ce qui donne des
 # caracteres nets au lieu de l'escalier habituel de Pillow.
@@ -273,6 +289,19 @@ class Toile:
                 lignes[-1] = self.tronquer(lignes[-1] + " " + reste, largeur, taille, gras)
         return lignes
 
+    def polygone(self, points, fond=None, contour=None):
+        """Un polygone en coordonnees logiques : l'eclair, les fleches."""
+        plats = []
+        for x, y in points:
+            plats += [round(x * self.e), round(y * self.e)]
+        self.d.polygon(plats, fill=fond, outline=contour)
+
+    def disque(self, cx, cy, rayon, fond):
+        """Un cercle plein. Pillow n'a pas de primitive « cercle » qui tienne
+        compte de l'echelle : celle-ci si."""
+        self.rect([cx - rayon, cy - rayon, cx + rayon, cy + rayon], fond=fond,
+                  rayon=rayon)
+
     def pastille(self, x, y, texte, fond, couleur=None, taille=11, gras=True,
                  hauteur=19):
         """Une etiquette arrondie : « CM », « EXAMEN », « à distance »."""
@@ -344,6 +373,135 @@ def _types_presents(cours):
             vus.add(cle)
             sortie.append((nom, couleur))
     return sortie
+
+
+# --- La meteo, dessinee -------------------------------------------------------
+def _nuage(toile, x, y, t, couleur=NUAGE):
+    """Un nuage inscrit dans le carre (x, y, t) : trois bosses et un socle."""
+    toile.disque(x + 0.34 * t, y + 0.54 * t, 0.19 * t, couleur)
+    toile.disque(x + 0.54 * t, y + 0.45 * t, 0.25 * t, couleur)
+    toile.disque(x + 0.73 * t, y + 0.57 * t, 0.17 * t, couleur)
+    toile.rect([x + 0.20 * t, y + 0.56 * t, x + 0.84 * t, y + 0.74 * t],
+               fond=couleur, rayon=0.09 * t)
+
+
+def _soleil(toile, cx, cy, r, rayons=True):
+    toile.disque(cx, cy, r, SOLEIL)
+    if not rayons:
+        return
+    # Huit rayons : quatre droits, quatre en diagonale. Les diagonales sont
+    # calculees, pas approchees a 0.7 — un rayon qui depasse se voit.
+    from math import cos, pi, sin
+    for i in range(8):
+        a = i * pi / 4
+        dx, dy = cos(a), sin(a)
+        toile.ligne([cx + dx * r * 1.35, cy + dy * r * 1.35,
+                     cx + dx * r * 1.95, cy + dy * r * 1.95], SOLEIL, 2)
+
+
+def _gouttes(toile, x, y, t, couleur=PLUIE, n=3):
+    for i in range(n):
+        gx = x + (0.32 + i * 0.18) * t
+        toile.ligne([gx, y + 0.78 * t, gx - 0.05 * t, y + 0.95 * t], couleur, 2.5)
+
+
+def _icone_meteo(toile, x, y, t, code):
+    """Le pictogramme d'un code WMO, dessine dans un carre de cote `t`.
+
+    Pourquoi dessiner plutot qu'ecrire un emoji : la police de secours d'un
+    serveur nu n'a aucun emoji, et _nettoyer() les retire donc de toutes les
+    images. Un pictogramme vectoriel, lui, sort toujours.
+    """
+    code = int(code or 0)
+    if code in (0,):
+        _soleil(toile, x + 0.5 * t, y + 0.5 * t, 0.24 * t)
+    elif code in (1, 2):
+        _soleil(toile, x + 0.64 * t, y + 0.36 * t, 0.18 * t)
+        _nuage(toile, x, y + 0.06 * t, t)
+    elif code in (3,):
+        _nuage(toile, x, y + 0.02 * t, t, NUAGE)
+    elif code in (45, 48):
+        for i in range(4):
+            largeur = 0.72 if i % 2 == 0 else 0.56
+            toile.rect([x + 0.14 * t, y + (0.32 + i * 0.13) * t,
+                        x + (0.14 + largeur) * t, y + (0.38 + i * 0.13) * t],
+                       fond=BROUILLARD, rayon=0.03 * t)
+    elif code in (71, 73, 75, 77, 85, 86):
+        _nuage(toile, x, y - 0.06 * t, t, NUAGE)
+        for i in range(3):
+            toile.disque(x + (0.34 + i * 0.18) * t, y + 0.84 * t, 0.045 * t, NEIGE)
+    elif code in (95, 96, 99):
+        _nuage(toile, x, y - 0.06 * t, t, NUAGE_SOMBRE)
+        toile.polygone([(x + 0.54 * t, y + 0.66 * t), (x + 0.40 * t, y + 0.92 * t),
+                        (x + 0.50 * t, y + 0.92 * t), (x + 0.42 * t, y + 1.10 * t),
+                        (x + 0.66 * t, y + 0.84 * t), (x + 0.55 * t, y + 0.84 * t),
+                        (x + 0.64 * t, y + 0.66 * t)], fond=ECLAIR)
+    elif code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+        fort = code in (65, 82, 63, 81)
+        _nuage(toile, x, y - 0.06 * t, t, NUAGE_SOMBRE if fort else NUAGE)
+        _gouttes(toile, x, y - 0.04 * t, t, n=4 if fort else 3)
+    else:
+        _nuage(toile, x, y + 0.02 * t, t, NUAGE)
+
+
+def _marge_pluie(depart, arrivee=None):
+    """Les minutes a retrancher a l'heure de depart parce qu'il pleut. 0 si la
+    meteo est coupee, injoignable, ou s'il fait sec."""
+    if not (config.METEO_ACTIVE and config.METEO_BRIEFING) or depart is None:
+        return 0
+    try:
+        import meteo as meteo_
+        return meteo_.trajet(depart, arrivee)[1]
+    except Exception as e:     # large a dessein : une meteo ratee, ce n'est
+        print(f"[!] marge meteo ignoree : {e}", flush=True)   # pas une image ratee
+        return 0
+
+
+def _bande_meteo(toile, y, largeur, jour_, depart=None, arrivee=None):
+    """Le bandeau meteo : le temps du jour, et ce qu'il change a ton depart.
+
+    Rend la nouvelle ordonnee. Sans bulletin — pas de reseau, meteo coupee — on
+    ne dessine rien du tout et on rend `y` inchange : une carte « meteo
+    indisponible » prendrait la place d'une information utile.
+    """
+    if not (config.METEO_ACTIVE and config.METEO_BRIEFING):
+        return y
+    try:
+        import meteo as meteo_
+    except ImportError:
+        return y
+
+    data = meteo_.bulletin()
+    if not data:
+        return y
+    resume = meteo_.jour(jour_, data)
+    creneaux = meteo_.fenetre(depart, arrivee or depart, data) if depart else []
+    gene = meteo_.pire(creneaux)
+    if resume is None and gene is None:
+        return y
+
+    hauteur = 70 if gene is not None else 54
+    toile.rect([MARGE, y, largeur - MARGE, y + hauteur], fond=CARTE, rayon=12)
+    # Le pictogramme illustre la ligne d'a cote, donc la JOURNEE — sauf s'il
+    # pleut au moment ou tu sors : ce jour-la, c'est la pluie qu'on dessine,
+    # meme si la journee est belle par ailleurs.
+    _icone_meteo(toile, MARGE + 14, y + (hauteur - 40) / 2, 40,
+                 gene.code if (gene is not None and (gene.mouille or resume is None))
+                 else resume.code)
+
+    x = MARGE + 68
+    if resume is not None:
+        toile.texte(x, y + 12, resume.detail(), 16, True, TEXTE,
+                    largeur_max=largeur - x - MARGE - 20)
+    if gene is not None:
+        ligne = f"Au départ de {depart:%H:%M} : {gene.detail()}"
+        phrase = meteo_.conseil(creneaux)
+        if phrase:
+            ligne += f" — {phrase}"
+        toile.texte(x, y + (36 if resume is not None else 18), ligne, 13.5, False,
+                    PLUIE if gene.mouille else TEXTE_MOYEN,
+                    largeur_max=largeur - x - MARGE - 20)
+    return y + hauteur + 12
 
 
 # --- La grille : les jours a la verticale ------------------------------------
@@ -615,8 +773,15 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
     y = _entete(toile, titre, sous)
 
     # L'heure de lever, en haut : c'est l'information qu'on cherche le soir.
+    depart = None
     if jour >= maintenant.date():
         lever, depart = vue.heure_lever(jc[0])
+        # La pluie recule l'heure de depart : c'est la seule chose que la meteo
+        # a le droit de changer, et elle ne la change que quand il pleut.
+        marge = 0
+        if not jc[0].a_distance:
+            marge = _marge_pluie(depart, jc[0].debut)
+            depart -= timedelta(minutes=marge)
         if jour > maintenant.date() or lever > maintenant:
             toile.rect([MARGE, y, LARGEUR_JOURNEE - MARGE, y + 42], fond=CARTE_HAUTE,
                        rayon=10)
@@ -626,8 +791,12 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
             else:
                 txt = (f"Lever {lever:%H:%M}   ·   départ {depart:%H:%M}   ·   "
                        f"cours à {jc[0].debut:%H:%M}")
+                if marge:
+                    txt += f"   ·   +{marge} min de pluie"
             toile.texte(MARGE + 16, y + 12, txt, 14.5, True, TEXTE)
             y += 54
+
+    y = _bande_meteo(toile, y, LARGEUR_JOURNEE, jour, depart, jc[0].debut)
 
     precedent = None
     for c in jc:
@@ -1030,3 +1199,277 @@ def _carte_suite(toile, y, titre, liste, maintenant):
                     aligne="droite")
         yy += 28
     return y + hauteur + 10
+
+
+# --- Le tableau de bord de la semaine ----------------------------------------
+LARGEUR_STATS = 900
+
+# L'ordre des types dans une barre empilee est FIXE, jamais celui du tri : une
+# matiere qui perd son TP ne doit pas repeindre les autres. C'est la meme regle
+# que pour la legende — une couleur appartient a un type, pas a un rang.
+ORDRE_TYPES = ["CM", "TD", "TP", "PROJET", "EXAMEN", "EXAM", "DS", "CONTROLE",
+               "SOUTENANCE", "à distance", "autre"]
+
+
+def _couleur_type(nom):
+    if nom == "à distance":
+        return COULEUR_DISTANCE
+    return COULEURS.get(str(nom).upper(), COULEURS[""])
+
+
+def _tuile(toile, x, y, largeur, hauteur, titre, valeur, detail="",
+           accent=ACCENT, detail_couleur=None):
+    """Une tuile de chiffre : le libelle en petit, la valeur en grand.
+
+    Le chiffre est la raison d'etre de la tuile : il est donc le plus gros
+    element, et le libelle passe au-dessus en gris — l'inverse se lit deux fois
+    moins vite.
+    """
+    toile.rect([x, y, x + largeur, y + hauteur], fond=CARTE, rayon=12)
+    toile.rect([x, y + 14, x + 4, y + hauteur - 14], fond=accent, rayon=2)
+    toile.texte(x + 16, y + 13, titre.upper(), 10.5, True, TEXTE_FAIBLE,
+                largeur_max=largeur - 26)
+    toile.texte(x + 15, y + 30, valeur, 26, True, TEXTE, largeur_max=largeur - 26)
+    if detail:
+        toile.texte(x + 16, y + hauteur - 24, detail, 12, False,
+                    detail_couleur or TEXTE_MOYEN, largeur_max=largeur - 26)
+    return hauteur
+
+
+def _axe_heures(toile, x0, x1, y0, y1, maxi):
+    """La grille de fond d'un graphique en barres : un trait toutes les heures
+    rondes, et les heures ecrites sous l'axe.
+
+    La grille est volontairement a peine visible : elle sert a comparer deux
+    barres, pas a etre regardee. Le pas s'adapte pour ne jamais depasser huit
+    traits, sinon la grille devient une texture.
+    """
+    if maxi <= 0:
+        return
+    pas = 60
+    while maxi / pas > 8:
+        pas += 60
+    h = pas
+    while h <= maxi:
+        x = x0 + (h / maxi) * (x1 - x0)
+        toile.ligne([x, y0, x, y1], TRAIT, 1)
+        toile.texte(x, y1 + 6, f"{int(h / 60)} h", 10.5, False, TEXTE_FAIBLE,
+                    aligne="centre")
+        h += pas
+
+
+def _barre_empilee(toile, x0, x1, y, hauteur, segments, maxi):
+    """Une barre faite de segments colores, separes par un vrai trou.
+
+    Le trou de 2 px entre deux segments n'est pas cosmetique : sans lui, deux
+    couleurs voisines se touchent et l'oeil lit une seule barre degradee au
+    lieu de deux parts. Les segments trop fins pour etre vus sont fusionnes
+    dans le precedent plutot que dessines en traits de 1 px illisibles.
+    """
+    if maxi <= 0:
+        return
+    echelle = (x1 - x0) / maxi
+    x = x0
+    dessines = []
+    for nom, minutes in segments:
+        largeur = minutes * echelle
+        if largeur < 6 and dessines:
+            dessines[-1] = (dessines[-1][0], dessines[-1][1], dessines[-1][2] + largeur)
+            continue
+        dessines.append((nom, _couleur_type(nom), largeur))
+    for i, (_, couleur, largeur) in enumerate(dessines):
+        fin = x + largeur - (2 if i < len(dessines) - 1 else 0)
+        toile.rect([x, y, max(fin, x + 3), y + hauteur], fond=couleur,
+                   rayon=min(4, hauteur / 2))
+        x += largeur
+
+
+def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
+                 avertissement=""):
+    """Le tableau de bord d'une semaine : combien, ou, et quand.
+
+    `s` est un stats.Semaine deja calcule — ce module dessine, il ne compte
+    pas. Trois etages, du plus resume au plus detaille : les tuiles de
+    chiffres, la repartition par matiere, puis la charge jour par jour.
+    """
+    import stats as st
+
+    toile = Toile(LARGEUR_STATS,
+                  400 + 44 * max(len(s.matieres), 1) + 44 * 7 + 220)
+    y = _entete(toile, "Ta semaine", f"{s.libelle} · {s.seances} séances")
+
+    if s.vide:
+        toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 90], fond=CARTE, rayon=RAYON)
+        toile.texte(LARGEUR_STATS / 2, y + 32, "Aucun cours cette semaine-là.",
+                    19, True, TEXTE_MOYEN, aligne="centre")
+        return toile.finir(chemin or (config.DONNEES / "stats.png"),
+                           _pied(toile, y + 110))
+
+    # --- Etage 1 : les quatre chiffres qu'on retient ------------------------
+    ecart, origine = st.comparer(s, cours)
+    if ecart is None:
+        detail_total, couleur_total = f"sur {s.jours_travailles} jours", TEXTE_MOYEN
+    elif abs(ecart) < 15:
+        detail_total, couleur_total = "comme la semaine passée", TEXTE_MOYEN
+    else:
+        fleche = "▲" if ecart > 0 else "▼"
+        detail_total = f"{fleche} {vue.duree_fr(abs(ecart))} vs S-1 ({origine})"
+        couleur_total = ORANGE if ecart > 0 else VERT
+
+    plein = s.jour_plein
+    largeur_tuile = (LARGEUR_STATS - 2 * MARGE - 3 * 12) / 4
+    tuiles = [
+        ("Total de cours", vue.duree_fr(s.total_minutes), detail_total, ACCENT,
+         couleur_total),
+        ("Moyenne par jour", vue.duree_fr(s.moyenne_par_jour),
+         f"{s.seances} séances au total", COULEURS["TD"], None),
+        ("Temps de trou", vue.duree_fr(s.trous_minutes) if s.trous_minutes else "aucun",
+         f"{s.nb_trous} créneau{'x' if s.nb_trous > 1 else ''}" if s.nb_trous
+         else "journées compactes",
+         ORANGE if s.trous_minutes >= 240 else COULEURS["TP"], None),
+        ("Jour le plus lourd",
+         vue.JOURS[plein.jour.weekday()].capitalize() if plein else "—",
+         f"{vue.duree_fr(plein.minutes)} · {plein.debut:%H:%M}→{plein.fin:%H:%M}"
+         if plein else "", COULEURS["EXAMEN"] if plein and plein.minutes >= 480
+         else COULEURS["CM"], None),
+    ]
+    for i, (titre, valeur, detail, accent, couleur) in enumerate(tuiles):
+        _tuile(toile, MARGE + i * (largeur_tuile + 12), y, largeur_tuile, 96,
+               titre, valeur, detail, accent, couleur)
+    y += 96 + 18
+
+    # Ce que les chiffres ne peuvent pas dire, ecrit en toutes lettres et en
+    # haut : une statistique incomplete doit s'annoncer avant d'etre lue.
+    if avertissement:
+        toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 40], fond=CARTE, rayon=10)
+        toile.rect([MARGE, y, MARGE + 5, y + 40], fond=ORANGE, rayon=3)
+        toile.texte(MARGE + 18, y + 12, avertissement, 13, False, TEXTE_MOYEN,
+                    largeur_max=LARGEUR_STATS - 2 * MARGE - 40)
+        y += 52
+
+    # Une ligne d'avertissement quand il y a un examen : ca ne se decouvre pas
+    # au detour d'une barre de couleur.
+    if s.examens:
+        toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 40], fond=CARTE, rayon=10)
+        toile.rect([MARGE, y, MARGE + 5, y + 40], fond=COULEURS["EXAMEN"], rayon=3)
+        jours_examens = ", ".join(
+            f"{vue.JOURS_COURTS[c.jour.weekday()]}. {c.debut:%H:%M}"
+            for c in s.examens[:4])
+        toile.texte(MARGE + 18, y + 11,
+                    f"{len(s.examens)} examen{'s' if len(s.examens) > 1 else ''} "
+                    f"cette semaine — {jours_examens}", 14, True, TEXTE,
+                    largeur_max=LARGEUR_STATS - 2 * MARGE - 40)
+        y += 52
+
+    # --- Etage 2 : ou passe le temps ---------------------------------------
+    toile.texte(MARGE, y, "Où passe ton temps", 16, True, TEXTE)
+    y += 28
+
+    montrees = list(s.matieres[:9])
+    reste = s.matieres[9:]
+    maxi = max([p.minutes for p in montrees] +
+               ([sum(p.minutes for p in reste)] if reste else []))
+
+    x_label, x_bar = MARGE + 4, MARGE + 210
+    x_fin = LARGEUR_STATS - MARGE - 86
+    # Le pourcentage est colle a gauche des barres : l'intitule s'arrete avant,
+    # sinon un nom long lui passe dessus.
+    largeur_nom = x_bar - x_label - 52
+    haut_zone = y
+    for p in montrees:
+        toile.texte(x_label, y + 3, p.nom, 13.5, False, TEXTE,
+                    largeur_max=largeur_nom)
+        toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
+        y += 34
+    if reste:
+        toile.texte(x_label, y + 3, f"{len(reste)} autres matières", 13.5, False,
+                    TEXTE_FAIBLE, largeur_max=largeur_nom)
+        toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
+        y += 34
+
+    # La grille passe DERRIERE les barres : on la dessine avant, puis les
+    # barres par-dessus. L'inverse hachure les couleurs.
+    _axe_heures(toile, x_bar, x_fin, haut_zone + 2, y - 8, maxi)
+
+    y = haut_zone
+    for p in montrees:
+        segments = [(nom, p.par_type[nom]) for nom in ORDRE_TYPES if nom in p.par_type]
+        segments += [(nom, m) for nom, m in p.par_type.items() if nom not in ORDRE_TYPES]
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18, segments, maxi)
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(p.minutes),
+                    13.5, True, TEXTE, aligne="droite")
+        toile.texte(x_bar - 10, y + 5, f"{p.part_de(s.total_minutes):.0f} %", 11.5,
+                    False, TEXTE_FAIBLE, aligne="droite")
+        y += 34
+    if reste:
+        minutes = sum(p.minutes for p in reste)
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18, [("autre", minutes)], maxi)
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(minutes), 13.5,
+                    True, TEXTE_MOYEN, aligne="droite")
+        y += 34
+    y += 24
+
+    # --- Etage 3 : la charge jour par jour ---------------------------------
+    toile.texte(MARGE, y, "Jour par jour", 16, True, TEXTE)
+    toile.texte(LARGEUR_STATS - MARGE, y + 3,
+                "barre pleine : cours   ·   barre claire : présence, trous compris",
+                11.5, False, TEXTE_FAIBLE, aligne="droite")
+    y += 28
+
+    jours_montres = [j for j in s.jours if not j.vide or j.jour.weekday() < 5]
+    maxi_jour = max([j.amplitude for j in jours_montres] + [60])
+    haut_zone = y
+    for j in jours_montres:
+        toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
+        y += 34
+    _axe_heures(toile, x_bar, x_fin, haut_zone + 2, y - 8, maxi_jour)
+
+    y = haut_zone
+    for j in jours_montres:
+        etiquette = f"{vue.JOURS_COURTS[j.jour.weekday()]}. {j.jour:%d/%m}"
+        toile.texte(x_label, y + 3, etiquette, 13.5, j.jour == date.today(),
+                    TEXTE if not j.vide else TEXTE_FAIBLE)
+        if j.vide:
+            # « libre » serait un mensonge pour un jour que CELCAT ne sert
+            # plus : on ne sait pas ce qu'il y avait, on le dit.
+            toile.texte(x_bar + 8, y + 5,
+                        "hors données" if (avertissement and j.jour < date.today())
+                        else "libre", 12, False, TEXTE_FAIBLE)
+            y += 34
+            continue
+        # La presence d'abord, en clair : les cours viennent se poser dessus, et
+        # ce qui depasse EST le temps perdu. Deux mesures, une seule echelle.
+        largeur_presence = (j.amplitude / maxi_jour) * (x_fin - x_bar)
+        toile.rect([x_bar, y + 4, x_bar + max(largeur_presence, 4), y + 22],
+                   fond=CARTE_HAUTE, rayon=4)
+        segments = [(nom, j.par_type[nom]) for nom in ORDRE_TYPES if nom in j.par_type]
+        segments += [(nom, m) for nom, m in j.par_type.items() if nom not in ORDRE_TYPES]
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18,
+                       segments or [("autre", j.minutes)], maxi_jour)
+        detail = vue.duree_fr(j.minutes)
+        if j.trous_minutes:
+            detail += f"  +{vue.duree_fr(j.trous_minutes)}"
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, detail, 13, True,
+                    TEXTE, aligne="droite")
+        y += 34
+    y += 18
+
+    # La legende ne montre que les types reellement presents dans la semaine.
+    types = []
+    vus = set()
+    for p in s.matieres:
+        for nom in ORDRE_TYPES + list(p.par_type):
+            if nom in p.par_type and nom not in vus:
+                vus.add(nom)
+                types.append((nom, _couleur_type(nom)))
+    y = _legende(toile, y, types)
+
+    note = ""
+    if avec_historique:
+        passees = st.historique(5)
+        if len(passees) >= 2:
+            moyenne = sum(m for _, m in passees) / len(passees)
+            note = (f"moyenne des {len(passees)} dernières semaines connues : "
+                    f"{vue.duree_fr(moyenne)}")
+    return toile.finir(chemin or (config.DONNEES / "stats.png"),
+                       _pied(toile, y + 4, note))

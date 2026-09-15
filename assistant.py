@@ -57,7 +57,9 @@ import changements as chg
 import config
 import devoirs as dv
 import image
+import meteo
 import notif
+import stats
 import statut
 import vue
 from celcat import EchecConnexion
@@ -275,6 +277,40 @@ def cours_a_rappeler(jc):
     return garde
 
 
+def ligne_meteo(jc, jour):
+    """La meteo du trajet, en une ligne, pour la LEGENDE d'une photo.
+
+    Une legende part dans la notification Discord, la photo non : si la
+    journee commence sous la pluie, ca doit etre ecrit, pas seulement dessine.
+    Liste vide quand il n'y a rien a dire — pas de reseau, meteo coupee, jour
+    hors prevision, ou simplement un temps sans consequence.
+    """
+    if not (config.METEO_ACTIVE and config.METEO_BRIEFING) or not jc:
+        return []
+    try:
+        premier = jc[0]
+        resume = meteo.jour(jour)
+        if premier.a_distance:
+            creneaux = meteo.fenetre(premier.debut, premier.fin or premier.debut)
+        else:
+            _, depart = vue.heure_lever(premier)
+            creneaux = meteo.fenetre(depart, premier.debut)
+        gene = meteo.pire(creneaux)
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        print(f"[!] meteo ignoree dans la legende : {e}", flush=True)
+        return []
+
+    if resume is None and gene is None:
+        return []
+    if gene is not None and gene.mouille:
+        phrase = meteo.conseil(creneaux)
+        return [f"{gene.emoji} **{gene.detail()}** au départ"
+                + (f" — {phrase}." if phrase else ".")]
+    if resume is not None:
+        return [f"{resume.emoji} {resume.detail()}"]
+    return [f"{gene.emoji} {gene.detail()} au départ"]
+
+
 def legende_jour(cours, liste_devoirs, jour):
     """La legende sous la photo d'une journee.
 
@@ -294,6 +330,8 @@ def legende_jour(cours, liste_devoirs, jour):
     if len(salles) == 1 and salles != {"salle inconnue"}:
         lignes.append(f"📍 Tout se passe en **{salles.pop()}**.")
 
+    lignes += ligne_meteo(jc, jour)
+
     a_rendre = [d for d in dv.actifs(liste_devoirs)
                 if (r := dv.jours_restants(d)) is not None and r <= 1]
     if a_rendre:
@@ -304,6 +342,7 @@ def legende_jour(cours, liste_devoirs, jour):
 
 def _corps_briefing_matin(cours, liste_devoirs, aujourd, maintenant):
     corps = vue.bloc_journee(cours, liste_devoirs, aujourd, maintenant=maintenant)
+    corps = _avec_meteo(corps, celcat.du_jour(cours, aujourd), aujourd)
     urgents = dv.actifs(liste_devoirs, 0)
     if urgents:
         corps += ["", "🔥 **A rendre aujourd'hui**"] + \
@@ -316,8 +355,16 @@ def _corps_briefing_matin(cours, liste_devoirs, aujourd, maintenant):
     return corps, urgents
 
 
+def _avec_meteo(corps, jc, jour):
+    """La meteo en tete du briefing en texte. En tete, et pas en bas : c'est ce
+    qui decide de ce qu'on met sur le dos avant de lire le reste."""
+    lignes = ligne_meteo(jc, jour)
+    return (lignes + [""] + corps) if lignes else corps
+
+
 def _corps_briefing_soir(cours, liste_devoirs, demain):
     corps = vue.bloc_journee(cours, liste_devoirs, demain, avec_reveil=True)
+    corps = _avec_meteo(corps, celcat.du_jour(cours, demain), demain)
     seuils = set(config.DEVOIRS_JOURS_AVANT)
     urgents = [d for d in dv.actifs(liste_devoirs)
                if (r := dv.jours_restants(d)) is not None
@@ -413,12 +460,21 @@ def daemon():
             dernier_tableau = maintenant
             statut.publier(cours, liste_devoirs, demarrage, echecs)
             statut.publier_tableau_edt(cours, liste_devoirs)
+            # Le poids des semaines a venir est retenu au passage : c'est la
+            # seule occasion de le faire, CELCAT ne rend jamais le passe.
+            try:
+                stats.archiver_horizon(cours, aujourd)
+            except Exception as e:              # noqa: BLE001 - filet volontaire
+                print(f"[!] archivage des semaines ignore : {e}", flush=True)
 
         jc = celcat.du_jour(cours, aujourd)
 
-        # 3. Briefing du matin.
+        # 3. Briefing du matin. Les jours de la semaine ou il part se reglent
+        #    dans config.yaml (briefing_matin_jours) ; vide = tous les jours.
         cle = f"matin:{aujourd}"
         if not deja_envoye(etat, cle) and \
+                (not config.BRIEFING_MATIN_JOURS or
+                 aujourd.weekday() in config.BRIEFING_MATIN_JOURS) and \
                 _du(vue.a_heure(aujourd, config.BRIEFING_MATIN, (7, 0)), maintenant):
             corps, urgents = _corps_briefing_matin(cours, liste_devoirs, aujourd,
                                                    maintenant)
@@ -463,13 +519,23 @@ def daemon():
                 marquer(etat, cle)
 
         # 6. Relance de fin de journee : « des devoirs a noter ? »
+        #    A heure fixe si relance_devoirs_heure est rempli, sinon calee sur
+        #    la fin du dernier cours.
         if config.RELANCE_DEVOIRS and jc and not en_silence(maintenant):
             cle = f"relance:{aujourd}"
             dernier = max((c.fin or c.debut) for c in jc)
-            moment = dernier + timedelta(minutes=config.RELANCE_DEVOIRS_APRES_MINUTES)
+            if config.RELANCE_DEVOIRS_HEURE:
+                moment = vue.a_heure(aujourd, config.RELANCE_DEVOIRS_HEURE, (18, 0))
+            else:
+                moment = dernier + timedelta(
+                    minutes=config.RELANCE_DEVOIRS_APRES_MINUTES)
             if not deja_envoye(etat, cle) and _du(moment, maintenant, fenetre_min=10):
+                # A heure fixe, un cours peut encore etre en cours : on ne
+                # raconte pas que la journee est finie si elle ne l'est pas.
+                entete = ("Journee finie. Tu as eu :" if dernier <= maintenant
+                          else "Au programme aujourd'hui :")
                 envoyer("📝 Des devoirs a noter ?",
-                        ["Journee finie. Tu as eu :",
+                        [entete,
                          *[f"• {c.titre}" for c in jc],
                          "", "Tape `/devoir` pour en ajouter un."],
                         couleur="devoir", canal="devoirs")
@@ -506,6 +572,21 @@ def daemon():
                                      config.DONNEES / "recap-semaine.png",
                                      titre=f"Semaine du {lundi:%d/%m}"),
                 couleur="info", canal="annonces", secours=corps)
+
+            # La semaine en chiffres, juste apres la grille : l'une dit quand,
+            # l'autre dit combien. Les deux ensemble diraient trop.
+            semaine_a_venir = stats.semaine(cours, lundi)
+            if not semaine_a_venir.vide:
+                envoyer_photo(
+                    "📊 Ce que pèse la semaine",
+                    [f"**{vue.duree_fr(semaine_a_venir.total_minutes)}** de cours, "
+                     f"{semaine_a_venir.seances} séances, "
+                     f"{vue.duree_fr(semaine_a_venir.trous_minutes)} de trous."],
+                    lambda: image.rendre_stats(semaine_a_venir,
+                                               config.DONNEES / "recap-stats.png",
+                                               cours=cours),
+                    couleur="info", canal="annonces",
+                    secours=stats.bloc(semaine_a_venir, cours))
             marquer(etat, cle)
 
 
@@ -592,6 +673,20 @@ def construire_parseur():
     sp.add_argument("--sortie", default=str(config.RACINE / "jour.png"))
     sp.add_argument("--discord", action="store_true",
                     help="poster l'image dans #annonces")
+    sp.add_argument("--hors-ligne", dest="hors_ligne", action="store_true")
+
+    sp = sous.add_parser("stats", help="ce que pese une semaine, en PNG")
+    sp.add_argument("--semaine", type=int, default=0,
+                    help="0 = cette semaine, 1 = la prochaine, -1 = la passee")
+    sp.add_argument("--sortie", default=str(config.RACINE / "stats.png"))
+    sp.add_argument("--discord", action="store_true",
+                    help="poster l'image dans #annonces")
+    sp.add_argument("--hors-ligne", dest="hors_ligne", action="store_true")
+
+    sp = sous.add_parser("meteo", help="le temps qu'il fera, et ton trajet")
+    sp.add_argument("--jours", type=int, default=0,
+                    help="0 = aujourd'hui, 1 = demain (3 au maximum)")
+    sp.add_argument("--discord", action="store_true")
     sp.add_argument("--hors-ligne", dest="hors_ligne", action="store_true")
 
     sp = sous.add_parser("actu", help="ce qui a change dans l'emploi du temps")
@@ -755,6 +850,41 @@ def main():
             print(f"Image : {image.rendre_changements(liste, args.sortie)}")
         except image.PillowManquant:
             pass
+    elif cmd == "stats":
+        lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * args.semaine)
+        semaine_ = stats.semaine(cours, lundi)
+        note = stats.avertissement(semaine_, cours)
+        if semaine_.vide:
+            print(f"Aucun cours connu pour la semaine du {lundi:%d/%m}.")
+            return
+        lignes = stats.bloc(semaine_, cours)
+        if args.discord:
+            envoyer_photo(f"📊 Ta semaine — {semaine_.libelle}", lignes[:1],
+                          lambda: image.rendre_stats(semaine_, args.sortie,
+                                                     cours=cours, avertissement=note),
+                          couleur="info", canal="annonces", secours=lignes)
+            print("envoye.")
+            return
+        if note:
+            print(f"[!] {note}")
+        print(f"\n=== Ta semaine — {semaine_.libelle} ===")
+        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        try:
+            print(f"Image : {image.rendre_stats(semaine_, args.sortie, cours=cours, avertissement=note)}")
+        except image.PillowManquant:
+            pass
+    elif cmd == "meteo":
+        jour_ = date.today() + timedelta(days=max(0, min(args.jours, 3)))
+        resume = meteo.jour(jour_)
+        if resume is None:
+            print("Pas de meteo : Open-Meteo injoignable, ou jour hors prevision.")
+            return
+        jc = [c for c in celcat.du_jour(cours, jour_) if c.est_cours]
+        depart = vue.heure_lever(jc[0])[1] if jc and not jc[0].a_distance else None
+        lignes = [f"{vue.jour_fr(jour_).capitalize()} a {config.METEO_LIEU}",
+                  resume.resume()]
+        lignes += meteo.bloc_depart(depart, jc[0].debut if jc else None, jour_)[1:]
+        sortir("Meteo", lignes, vers_discord, "info", canal="commandes")
     elif cmd == "tableaux":
         ok_statut = statut.publier(cours, liste_devoirs)
         ok_edt = statut.publier_tableau_edt(cours, liste_devoirs)

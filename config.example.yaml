@@ -122,6 +122,10 @@ notifications:
   # Le briefing du matin : toute la journee d'un coup.
   briefing_matin: "07:00"
 
+  # Les jours ou ce briefing part. 0 = lundi ... 6 = dimanche.
+  # [0, 1, 2, 3, 4] = en semaine seulement. Liste vide = tous les jours.
+  briefing_matin_jours: []
+
   # Le briefing du soir : demain, l'heure de lever, les echeances.
   briefing_soir: "20:00"
 
@@ -143,8 +147,13 @@ notifications:
   # s'enchaine, au lieu de sonner a chaque intercours.
   seulement_premier_du_bloc: true
 
-  # « tu as eu Algo et Anglais, des devoirs a noter ? », apres le dernier cours.
+  # « tu as eu Algo et Anglais, des devoirs a noter ? », les jours ou tu as
+  # eu cours. Deux facons de choisir le moment :
+  #   * relance_devoirs_heure : une heure fixe ("18:00"), quoi qu'il arrive ;
+  #   * laisse-la vide et c'est relance_devoirs_apres_minutes qui decide,
+  #     compte a partir de la fin de ton dernier cours de la journee.
   relance_devoirs: true
+  relance_devoirs_heure: ""
   relance_devoirs_apres_minutes: 20
 
   # Echeances rappelees dans le briefing du soir, en jours restants.
@@ -199,6 +208,37 @@ affichage:
 
   # Les briefings du matin et du soir arrivent avec la photo de la journee.
   briefing_image: true
+
+
+# ─── La meteo ───────────────────────────────────────────────────────────────
+# Sert a deux choses, et deux seulement : savoir s'il faut un parapluie a
+# l'heure ou tu sors, et partir un peu plus tot quand il pleut.
+#
+# Source : Open-Meteo. NI compte NI cle d'API : rien a remplir, rien qui
+# expire. Les coordonnees ci-dessous sont celles de Cergy.
+meteo:
+  active: true
+
+  # Ou tu es le matin. Coordonnees decimales (clic droit sur Google Maps >
+  # le premier element du menu copie « 49.0362, 2.0631 »).
+  latitude: 49.0362
+  longitude: 2.0631
+  lieu: "Cergy"
+
+  # La meteo dans le briefing du matin et sur l'image de la journee.
+  dans_le_briefing: true
+
+  # En dessous de ce cumul sur une heure (en mm), il pleut sans que ca se
+  # remarque : inutile d'annoncer un parapluie pour 0.1 mm.
+  seuil_pluie: 0.2
+
+  # Minutes ajoutees au trajet conseille quand il pleut a l'heure du depart.
+  # Mets 0 si tu preferes que la meteo ne touche jamais a ton heure de depart.
+  marge_pluie_minutes: 10
+
+  # Le bulletin n'est pas redemande plus souvent que ca (minutes). Une
+  # prevision horaire ne change pas toutes les trois minutes.
+  cache_minutes: 30
 
 
 # ─── Matieres ───────────────────────────────────────────────────────────────

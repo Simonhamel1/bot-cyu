@@ -145,6 +145,22 @@ def _prochain_rendez_vous(maintenant):
 
 
 # --- Le panneau complet ------------------------------------------------------
+def _ligne_meteo():
+    """Le temps qu'il fait, en une ligne. "" si la meteo est coupee ou muette.
+
+    Le panneau est reecrit toutes les dix minutes : le bulletin vient du cache
+    de meteo.py, jamais d'un appel reseau par reecriture."""
+    if not config.METEO_ACTIVE:
+        return ""
+    try:
+        import meteo
+        courte = meteo.ligne_courte()
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        print(f"[!] meteo absente du panneau : {e}", flush=True)
+        return ""
+    return f"🌡️ **Dehors** — {courte} à {config.METEO_LIEU}" if courte else ""
+
+
 def bloc(cours, liste_devoirs=None, demarrage=None, echecs=0, maintenant=None):
     """Les lignes du panneau de statut."""
     maintenant = maintenant or datetime.now()
@@ -166,6 +182,10 @@ def bloc(cours, liste_devoirs=None, demarrage=None, echecs=0, maintenant=None):
                       + (f" · {vue.duree_fr(restant)} restantes" if restant else " · fini 🎉"))
     else:
         lignes.append("📆 **Aujourd'hui** — aucun cours")
+
+    ligne = _ligne_meteo()
+    if ligne:
+        lignes.append(ligne)
 
     lignes += ["", _ligne_devoirs(liste_devoirs), "",
                _ligne_celcat(echecs), _ligne_webmail()]

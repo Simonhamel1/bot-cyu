@@ -14,10 +14,10 @@ fichier : **`config.yaml`**. Aucun fichier Python n'a de valeur à modifier.
 
 | Quand | Où | Quoi |
 | --- | --- | --- |
-| **7 h** | `#annonces` | **la photo de la journée** : cours, salles, trous, ce qu'il faut rendre |
+| **8 h, en semaine** | `#annonces` | **la photo de la journée** : cours, salles, trous, **la météo de ton trajet**, ce qu'il faut rendre |
 | **20 h** | `#annonces` | **la photo de demain**, l'heure de lever conseillée, les échéances |
-| **dimanche 18 h** | `#annonces` | **la photo de la semaine** qui vient et sa charge |
-| fin de journée | `#devoirs` | « tu as eu Corporate finance et VBA, des devoirs à noter ? » |
+| **dimanche 18 h** | `#annonces` | **la photo de la semaine** qui vient, puis **ce qu'elle pèse en chiffres** |
+| **18 h** | `#devoirs` | « tu as eu Corporate finance et VBA, des devoirs à noter ? » |
 | dès qu'un cours bouge | `#alertes` | **la photo du changement**, et **il te tague** |
 | en permanence | `#edt` · `#statut` | l'image de la semaine et le panneau d'état, réécrits sur place, **sans notification** |
 
@@ -93,7 +93,69 @@ grand, avec l'heure de partir).
 
 Sans Pillow installé, aucune commande ne casse : tout retombe sur le texte.
 
-### Il répond aux commandes
+### Il te dit s'il faut un parapluie
+
+Le briefing du matin ne dit pas le temps qu'il fait : il dit le temps qu'il
+fera **à l'heure où tu sors**, ce qui n'est pas la même chose quand on part à
+7 h 45 pour un cours à 8 h 30.
+
+```text
+☁️ Couvert · 13 à 22 °C
+   Au départ de 07:35 : pluie · 7 °C · ressenti 4 °C · 2.4 mm — prends un parapluie
+```
+
+Et quand il pleut sur le trajet, **l'heure de départ conseillée recule toute
+seule** de dix minutes (`meteo.marge_pluie_minutes`). C'est la seule chose que
+la météo a le droit de changer.
+
+Source : [Open-Meteo](https://open-meteo.com) — **ni compte, ni clé d'API,
+rien à remplir**. Les coordonnées par défaut sont celles de Cergy ;
+`meteo.latitude` / `meteo.longitude` dans `config.yaml` pour ailleurs.
+`meteo.active: false` pour ne plus en entendre parler.
+
+Le pictogramme des images est **dessiné**, pas écrit en emoji : sur un serveur
+où seule DejaVu est installée, un emoji devient un carré vide.
+
+### Il compte ce que ta semaine te coûte
+
+`/stats` répond à ce que l'emploi du temps ne dit pas : est-ce que cette
+semaine est chargée, où passe ton temps, combien tu perds entre deux cours.
+
+```text
+TOTAL DE COURS     MOYENNE PAR JOUR   TEMPS DE TROU      JOUR LE PLUS LOURD
+22 h               4 h 24             9 h                Mardi
+▲ 3 h vs S-1       9 séances          3 créneaux         8 h · 08:30→17:00
+
+Où passe ton temps
+Algorithmique  45 %  ████████████████████████  10 h
+VBA            41 %  ██████████████████████     9 h
+Anglais        14 %  ███████                    3 h
+```
+
+Les barres sont **empilées par type de séance** (CM, TD, TP, examen, à
+distance), et la vue « jour par jour » superpose deux mesures sur la même
+échelle : les heures de cours en plein, et **le temps de présence** — trous
+compris — en clair derrière. L'écart entre les deux, c'est ce que la semaine
+te coûte vraiment.
+
+CELCAT ne sert que l'avenir : une semaine déjà commencée y est amputée de ses
+premiers jours. L'assistant **archive donc le poids de chaque semaine à venir**
+au passage (`donnees/semaines.json`), ce qui lui permet de comparer avec la
+semaine d'avant — et quand le compte ne peut pas être complet, **il l'écrit
+sur l'image** au lieu de laisser croire à un total exact.
+
+### Il répond aux commandes — et chaque réponse a ses boutons
+
+Chaque réponse est une **carte** : un bloc coloré qui contient le titre, la
+photo, le texte, et **ses propres boutons**. Une journée porte
+`◀ · Aujourd'hui · ▶ · La semaine · Texte`, les stats
+`◀ · Cette semaine · ▶ · La grille`, la liste des devoirs un bouton **✅ Fait**
+par ligne et un menu pour supprimer. On navigue en cliquant : le message se
+réécrit sur place, le salon ne se remplit pas.
+
+Ces boutons **survivent aux redémarrages** : leur identifiant contient tout ce
+qu'il faut pour rejouer l'action (`cyu:edt:j:2026-10-12`), le bot ne garde
+rien en mémoire. Un message d'il y a un mois marche encore.
 
 | Commande | Effet |
 | --- | --- |
@@ -101,13 +163,15 @@ Sans Pillow installé, aucune commande ne casse : tout retombe sur le texte.
 | `/photo [du] [au]` | une période précise, en photo |
 | `/actu [jours]` | **ce qui a changé** dans l'emploi du temps, en photo |
 | `/prochain` | le prochain cours, la salle, et dans combien de temps |
-| `/devoirs` | ce qu'il reste à faire, avec un bouton ✅ par devoir |
-| `/devoir` | un formulaire pour en ajouter un |
-| `/fait 3` | raye le devoir n° 3 |
+| `/devoirs` | la liste interactive : **un bouton ✅ par devoir**, un menu pour supprimer, une page par six |
+| `/devoir` | un formulaire pour en ajouter un — titre, matière, échéance, **type** (devoir, DM, projet, révision, examen), détails |
+| `/fait` · `/supprimer` | rayer ou retirer un devoir, **la liste s'affiche pendant la frappe** |
 | `/libre` | tes créneaux libres |
+| `/stats [quand]` | **ce que pèse ta semaine** en photo : heures, matières, trous, jour le plus lourd |
+| `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |
-| `/panneau` | épingle un panneau de boutons — tout ça sans rien taper |
+| `/panneau` | épingle un panneau de boutons et un menu « voir un jour de la semaine » — tout ça sans rien taper |
 | `/ics` | le fichier à importer dans ton agenda |
 | `/help` | l'aide, construite depuis ta config |
 
@@ -356,9 +420,9 @@ jour le code sans écraser le cache ni le carnet de devoirs.
 
 ### Le fuseau horaire du serveur
 
-Les horaires de `config.yaml` (`briefing_matin: "07:00"`, `silence_de`, …) sont
+Les horaires de `config.yaml` (`briefing_matin: "08:00"`, `silence_de`, …) sont
 lus en **heure locale du serveur**, sans conversion. Un VPS livré en UTC
-enverrait donc le briefing de 7 h à 9 h heure de Paris. À régler une fois :
+enverrait donc le briefing de 8 h à 10 h heure de Paris. À régler une fois :
 
 ```bash
 sudo timedatectl set-timezone Europe/Paris
@@ -390,19 +454,22 @@ systemctl --user stop assistant-cyu
 | `celcat.py` | connexion CELCAT, lecture des cours, cache disque |
 | `changements.py` | rapproche deux versions de l'EDT et dit ce qui a bougé |
 | `vue.py` | toute la mise en forme texte : journée, grille, devoirs, .ics |
-| `image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours (Pillow) |
+| `image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours, le tableau de bord de la semaine (Pillow) |
 | `actu.py` | le suivi des changements : référence sur disque, garde-fous, anti-doublon, journal d'un mois |
 | `devoirs.py` | le carnet de devoirs et ses échéances « prochain cours de X » |
+| `meteo.py` | la météo Open-Meteo : le temps de ton trajet, le parapluie, la marge de pluie |
+| `stats.py` | ce que pèse une semaine : heures, matières, trous, archive des semaines |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |
 | `assistant.py` | le daemon et la ligne de commande |
-| `bot.py` | le bot Discord : commandes slash, panneau de boutons |
+| `interface.py` | l'allure du bot : les cartes (conteneur coloré, photo intégrée, boutons persistants) |
+| `bot.py` | le bot Discord : commandes slash, navigation par boutons, panneau, formulaire |
 | `uptime.py` | la surveillance du webmail |
 | `installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
 | `deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
 | `assistant-cyu.service` | l'unité systemd du bot |
 | `uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
-| `requirements.txt` | les dépendances Python |
+| `requirements.txt` | les dépendances Python — **discord.py 2.7 au minimum** pour les cartes |
 | `donnees/` | cache, devoirs, état — local, jamais sur GitHub |
 
 ---

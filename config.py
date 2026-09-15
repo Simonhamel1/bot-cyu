@@ -102,6 +102,7 @@ _cyu = _section("cyu")
 _moi = _section("moi")
 _notif = _section("notifications")
 _aff = _section("affichage")
+_meteo = _section("meteo")
 
 
 def _txt(source, cle, defaut=""):
@@ -132,6 +133,13 @@ def _liste_entiers(source, cle):
         except (TypeError, ValueError):
             pass
     return sorted(set(sortie), reverse=True)
+
+
+def _flottant(source, cle, defaut):
+    try:
+        return float(str(source.get(cle, defaut)).replace(",", "."))
+    except (TypeError, ValueError):
+        return defaut
 
 
 def _optionnel_entier(source, cle):
@@ -191,6 +199,9 @@ JOURNEE_FIN = _txt(_moi, "journee_fin", "19:00")
 
 # --- Notifications -----------------------------------------------------------
 BRIEFING_MATIN = _txt(_notif, "briefing_matin", "07:00")
+# Les jours ou le briefing du matin part : 0 = lundi ... 6 = dimanche.
+# Liste vide (ou absente) = tous les jours, comme avant.
+BRIEFING_MATIN_JOURS = sorted({j % 7 for j in _liste_entiers(_notif, "briefing_matin_jours")})
 BRIEFING_SOIR = _txt(_notif, "briefing_soir", "20:00")
 RECAP_SEMAINE_JOUR = _entier(_notif, "recap_semaine_jour", 6) % 7
 RECAP_SEMAINE_HEURE = _txt(_notif, "recap_semaine_heure", "18:00")
@@ -201,6 +212,9 @@ SEULEMENT_PREMIER_COURS_DU_BLOC = _bool(_notif, "seulement_premier_du_bloc", Tru
 
 RELANCE_DEVOIRS = _bool(_notif, "relance_devoirs", True)
 RELANCE_DEVOIRS_APRES_MINUTES = _entier(_notif, "relance_devoirs_apres_minutes", 20)
+# Une heure fixe ("18:00") prend le pas sur « apres le dernier cours » ; vide,
+# on garde le calage sur la fin des cours.
+RELANCE_DEVOIRS_HEURE = _txt(_notif, "relance_devoirs_heure")
 DEVOIRS_JOURS_AVANT = _liste_entiers(_notif, "devoirs_jours_avant") or [7, 3, 1, 0]
 
 VERIF_EDT_MINUTES = max(5, _entier(_notif, "verif_edt_minutes", 15))
@@ -234,6 +248,22 @@ TABLEAU_EDT_IMAGE = _bool(_aff, "tableau_edt_image", True)
 BRIEFING_IMAGE = _bool(_aff, "briefing_image", True)
 
 
+# --- Meteo -------------------------------------------------------------------
+# Open-Meteo ne demande ni compte ni cle : il n'y a donc rien a remplir pour
+# que ca marche, seulement des coordonnees a changer si tu n'es pas a Cergy.
+METEO_ACTIVE = _bool(_meteo, "active", True)
+METEO_LAT = _flottant(_meteo, "latitude", 49.0362)
+METEO_LON = _flottant(_meteo, "longitude", 2.0631)
+METEO_LIEU = _txt(_meteo, "lieu", "Cergy")
+# En dessous de ce cumul horaire (mm), il pleut sans que ca se remarque.
+METEO_SEUIL_PLUIE = _flottant(_meteo, "seuil_pluie", 0.2)
+# Minutes ajoutees au trajet quand il pleut a l'heure du depart. 0 = jamais.
+METEO_MARGE_PLUIE_MINUTES = _entier(_meteo, "marge_pluie_minutes", 10)
+METEO_CACHE_MINUTES = max(10, _entier(_meteo, "cache_minutes", 30))
+# La meteo dans le briefing du matin, et dans l'image de la journee.
+METEO_BRIEFING = _bool(_meteo, "dans_le_briefing", True)
+
+
 # --- Matieres ----------------------------------------------------------------
 MATIERES = BRUT.get("matieres") if isinstance(BRUT.get("matieres"), dict) else {}
 
@@ -244,6 +274,8 @@ DONNEES = RACINE / "donnees"
 FICHIER_DEVOIRS = DONNEES / "devoirs.json"      # ton carnet de devoirs
 FICHIER_CACHE = DONNEES / "edt_cache.json"      # dernier emploi du temps connu
 FICHIER_ETAT = DONNEES / "etat.json"            # ce qui a deja ete envoye
+FICHIER_METEO = DONNEES / "meteo.json"          # dernier bulletin Open-Meteo
+FICHIER_SEMAINES = DONNEES / "semaines.json"    # le poids des semaines passees
 
 
 def preparer_dossiers():
@@ -359,12 +391,24 @@ def resume():
     rappels = (", ".join(f"{m} min" for m in AVANT_COURS_MINUTES)
                if AVANT_COURS_MINUTES else "aucun (briefings seulement)")
     premier = f"{PREMIER_COURS_MINUTES} min avant" if PREMIER_COURS_MINUTES else "desactive"
+    noms_jours = ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")
+    jours_matin = (", ".join(noms_jours[j] for j in BRIEFING_MATIN_JOURS)
+                   if BRIEFING_MATIN_JOURS else "tous les jours")
+    if not RELANCE_DEVOIRS:
+        relance = "desactivee"
+    elif RELANCE_DEVOIRS_HEURE:
+        relance = RELANCE_DEVOIRS_HEURE
+    else:
+        relance = f"{RELANCE_DEVOIRS_APRES_MINUTES} min apres le dernier cours"
     lignes += [
         "",
-        f"  briefing matin       {BRIEFING_MATIN}",
+        f"  briefing matin       {BRIEFING_MATIN} ({jours_matin})",
         f"  briefing soir        {BRIEFING_SOIR}",
         f"  rappels avant cours  {rappels}",
         f"  rappel premier cours {premier}",
+        f"  relance devoirs      {relance}",
         f"  silence              {SILENCE_DE or '-'} -> {SILENCE_A or '-'}",
+        f"  meteo                " + (f"{METEO_LIEU} ({METEO_LAT:.4f}, {METEO_LON:.4f})"
+                                      if METEO_ACTIVE else "desactivee"),
     ]
     return lignes

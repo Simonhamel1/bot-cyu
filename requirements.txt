@@ -1,5 +1,5 @@
 requests>=2.31
-discord.py>=2.3
+discord.py>=2.7
 PyYAML>=6.0
 # Le rendu en images : l'emploi du temps, les changements, les devoirs.
 # Sans elle, tout retombe sur le texte, mais on perd l'essentiel de l'interet.
