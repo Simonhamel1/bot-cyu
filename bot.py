@@ -307,7 +307,9 @@ bot = Assistant()
 # nous rend cet identifiant, on le decoupe, et on rejoue l'action. Rien n'est
 # garde en memoire cote bot : c'est pour ca que ca marche apres un redemarrage.
 def _decouper_args(texte):
-    return [a for a in str(texte or "").split(":") if a != ""]
+    # Un morceau qui commence par « _ » est un suffixe de dedoublonnage pose
+    # par interface.py, pas un argument (voir interface.Bouton.suffixe).
+    return [a for a in str(texte or "").split(":") if a != "" and not a.startswith("_")]
 
 
 class BoutonCyu(discord.ui.DynamicItem[discord.ui.Button], template=TEMPLATE):

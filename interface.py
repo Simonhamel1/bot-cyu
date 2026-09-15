@@ -70,10 +70,16 @@ class Bouton:
     style: str = "gris"          # gris · bleu · vert · rouge
     emoji: str | None = None
     inactif: bool = False
+    # Pose par la fabrique quand deux boutons d'une meme carte visent la meme
+    # action : « ◀ » depuis demain et « Aujourd'hui » menent au meme jour, et
+    # Discord refuse deux identifiants identiques dans un message. Le suffixe
+    # commence par « _ » : bot.py l'ignore en relisant les arguments.
+    suffixe: str = ""
 
     @property
     def custom_id(self):
-        return identifiant(self.action, *self.args)
+        base = identifiant(self.action, *self.args)
+        return (base + self.suffixe)[:100] if self.suffixe else base
 
 
 STYLES = {
@@ -156,6 +162,24 @@ class Carte(discord.ui.LayoutView):
             pass
 
 
+def _dedoublonner(rangees, menus=()):
+    """Rend unique l'identifiant de chaque bouton d'une carte.
+
+    Discord : « Component custom id cannot be duplicated ». Deux boutons qui
+    font la meme chose (la fleche et le raccourci) ont le droit d'exister
+    tous les deux ; ils n'ont pas le droit de porter le meme nom.
+    """
+    vus = {m.custom_id for m in menus}
+    n = 0
+    for r in rangees:
+        for b in r:
+            b.suffixe = ""
+            while b.custom_id in vus:
+                n += 1
+                b.suffixe = f":_{n}"
+            vus.add(b.custom_id)
+
+
 def _rangee(boutons, fabrique_bouton):
     rangee = discord.ui.ActionRow()
     for b in boutons[:5]:
@@ -211,6 +235,7 @@ def carte(titre, lignes=(), teinte="info", sous_titre="", image=None,
     # Les rangees de boutons : une liste plate = une seule rangee.
     rangees = list(boutons) if boutons and isinstance(boutons[0], (list, tuple)) \
         else ([list(boutons)] if boutons else [])
+    _dedoublonner(rangees, menus)
     if rangees or menus:
         conteneur.add_item(discord.ui.Separator())
     for m in menus:
@@ -290,6 +315,7 @@ def carte_composee(titre, composants, teinte="info", sous_titre="", boutons=(),
 
     rangees = list(boutons) if boutons and isinstance(boutons[0], (list, tuple)) \
         else ([list(boutons)] if boutons else [])
+    _dedoublonner(rangees, menus)
     if rangees or menus:
         conteneur.add_item(discord.ui.Separator())
     for m in menus:
