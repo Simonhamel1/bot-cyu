@@ -167,7 +167,7 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/devoir` | un formulaire pour en ajouter un — titre, matière, échéance, **type** (devoir, DM, projet, révision, examen), détails |
 | `/fait` · `/supprimer` | rayer ou retirer un devoir, **la liste s'affiche pendant la frappe** |
 | `/libre` | tes créneaux libres |
-| `/stats [quand]` | **ce que pèse ta semaine** en photo : heures, matières, trous, jour le plus lourd |
+| `/stats [quand]` | **ce que pèse ta semaine** en photo : heures, matières, trous, jour le plus lourd. `quand: tout l'emploi du temps` — **toutes les heures par matière**, et semaine par semaine |
 | `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |

@@ -109,6 +109,7 @@ SEMAINE_CHOIX = [
     app_commands.Choice(name="la semaine prochaine", value=1),
     app_commands.Choice(name="dans deux semaines", value=2),
     app_commands.Choice(name="la semaine passée", value=-1),
+    app_commands.Choice(name="tout l'emploi du temps connu", value=99),
 ]
 
 AFFICHAGE_CHOIX = [
@@ -637,10 +638,11 @@ async def vue_stats(lundi):
     note = stats.avertissement(semaine_, cours)
     cette = celcat.semaine_de(date.today())
     navigation = [
-        _b("◀", "stats", lundi - timedelta(days=7)),
-        _b("Cette semaine", "stats", cette, style="bleu", inactif=lundi == cette),
-        _b("▶", "stats", lundi + timedelta(days=7)),
-        _b("La grille", "edt", "s", lundi, emoji="🗓️"),
+        [_b("◀", "stats", lundi - timedelta(days=7)),
+         _b("Cette semaine", "stats", cette, style="bleu", inactif=lundi == cette),
+         _b("▶", "stats", lundi + timedelta(days=7)),
+         _b("La grille", "edt", "s", lundi, emoji="🗓️")],
+        [_b("Tout l'emploi du temps", "bilan", emoji="📚")],
     ]
     titre = f"Ta semaine — {semaine_.libelle}"
 
@@ -668,6 +670,28 @@ async def vue_stats(lundi):
             f"{vue.duree_fr(semaine_.trous_minutes)} de trous")
     return carte(titre, [f"-# ⚠️ {note}"] if note else [], "info", sous_titre=sous,
                  image=fichier, boutons=navigation), [fichier]
+
+
+async def vue_bilan():
+    """Tout ce que CELCAT connait : les heures par matiere, et par semaine."""
+    cours, _ = await _donnees()
+    b = await asyncio.to_thread(stats.bilan, cours)
+    boutons = [_b("Cette semaine", "stats", celcat.semaine_de(date.today()),
+                  style="bleu", emoji="📊"),
+               _b("La grille", "edt", "s", celcat.semaine_de(date.today()), emoji="🗓️"),
+               _b("Actualiser", "bilan", emoji="🔄")]
+    titre = "Tout l'emploi du temps"
+    if b.vide:
+        return carte(titre, ["CELCAT ne connaît aucun cours pour l'instant."],
+                     "calme", boutons=boutons), []
+    sous = (f"{b.libelle} · {vue.duree_fr(b.total_minutes)} de cours · "
+            f"{b.seances} séances · {len(b.matieres)} matières")
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_bilan(b, chemin, cours=cours), nom="bilan")
+    if fichier is None:
+        return carte(titre, stats.bloc_bilan(b), "info", boutons=boutons, pied=souci), []
+    return carte(titre, [], "info", sous_titre=sous, image=fichier,
+                 boutons=boutons, pied="tout ce que CELCAT connaît à ce jour"), [fichier]
 
 
 # --- La meteo ----------------------------------------------------------------
@@ -747,7 +771,14 @@ async def vue_libre(jours=7):
 async def vue_statut():
     cours, liste_devoirs = await _donnees()
     vivant = any(t.name == "daemon-cyu" and t.is_alive() for t in threading.enumerate())
-    lignes = list(st.bloc(cours, liste_devoirs, DEMARRAGE))
+    # Le panneau d'etat est le dernier endroit qui a le droit de tomber : c'est
+    # lui qu'on ouvre quand quelque chose ne va pas. Une ligne qui echoue est
+    # remplacee par son erreur, et le reste s'affiche quand meme.
+    try:
+        lignes = list(await asyncio.to_thread(st.bloc, cours, liste_devoirs, DEMARRAGE))
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        traceback.print_exc()
+        lignes = [f"⚠️ le panneau d'état a échoué : `{type(e).__name__}: {e}`"[:300]]
     lignes += ["", "**Le daemon** — " + ("🟢 actif" if vivant else "🔴 ARRÊTÉ")
                + ("" if AVEC_DAEMON else " (AVEC_DAEMON = False dans bot.py)"),
                "", "**Les salons**"]
@@ -838,7 +869,8 @@ def texte_aide():
         "`/actu` — **ce qui a changé** dans l'emploi du temps",
         "`/prochain` — le prochain cours, la salle, et dans combien de temps",
         "`/stats` — **ce que pèse ta semaine** : heures, matières, trous, jour "
-        "le plus lourd",
+        "le plus lourd. `quand: tout l'emploi du temps` pour le bilan de "
+        "**toutes les heures par matière**",
         "`/meteo` — le temps, et **s'il faut un parapluie** pour ton trajet",
         "`/libre` — tes créneaux libres",
         "",
@@ -1044,6 +1076,8 @@ async def _vue_navigation(action, args, valeurs):
             return await vue_grille(_date(args[1]), _date(args[2]), texte=True)
     if action == "stats":
         return await vue_stats(_date(args[0]))
+    if action == "bilan":
+        return await vue_bilan()
     if action == "meteo":
         return await vue_meteo(int(args[0]))
     if action == "actu":
@@ -1077,7 +1111,13 @@ async def _vue_navigation(action, args, valeurs):
 async def _commande(inter, coroutine, ephemere=False):
     """Le tronc commun : accuser reception, calculer, repondre."""
     await inter.response.defer(ephemeral=ephemere, thinking=True)
-    vue_, fichiers = await coroutine
+    try:
+        vue_, fichiers = await coroutine
+    except Exception:
+        print(f"[!] {inter.command.name if inter.command else '?'} a échoué :",
+              flush=True)
+        traceback.print_exc()
+        raise
     await repondre(inter, vue_, fichiers, ephemere=ephemere)
 
 
@@ -1195,6 +1235,9 @@ async def auto_devoir(inter: discord.Interaction, saisie: str):
 @app_commands.describe(quand="quelle semaine regarder (cette semaine par défaut)")
 @app_commands.choices(quand=SEMAINE_CHOIX)
 async def cmd_stats(inter: discord.Interaction, quand: int = 0):
+    if quand == 99:
+        await _commande(inter, vue_bilan())
+        return
     lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * quand)
     await _commande(inter, vue_stats(lundi))
 

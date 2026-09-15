@@ -267,6 +267,138 @@ def semaine(cours, lundi=None):
     )
 
 
+# --- Le bilan : tout l'emploi du temps connu ---------------------------------
+@dataclass(frozen=True)
+class Bilan:
+    """Le poids de tout ce que CELCAT connait, matiere par matiere."""
+    debut: date
+    fin: date
+    matieres: tuple
+    total_minutes: float
+    seances: int
+    semaines: tuple          # (lundi, minutes, seances), une par semaine couverte
+    distanciel_minutes: float
+    examens: tuple
+
+    @property
+    def vide(self):
+        return self.seances == 0
+
+    @property
+    def heures(self):
+        return self.total_minutes / 60
+
+    @property
+    def nb_semaines(self):
+        """Les semaines qui ont au moins un cours : une semaine de vacances ne
+        doit pas faire baisser la moyenne."""
+        return sum(1 for _, m, _ in self.semaines if m)
+
+    @property
+    def moyenne_semaine(self):
+        return self.total_minutes / max(self.nb_semaines, 1)
+
+    @property
+    def part_distanciel(self):
+        return (self.distanciel_minutes / self.total_minutes * 100
+                if self.total_minutes else 0)
+
+    @property
+    def semaine_pleine(self):
+        pleines = [s for s in self.semaines if s[1]]
+        return max(pleines, key=lambda s: s[1]) if pleines else None
+
+    @property
+    def libelle(self):
+        return (f"du {vue.jour_fr(self.debut, court=True)} "
+                f"au {vue.jour_fr(self.fin, court=True)}")
+
+
+def bilan(cours, debut=None, fin=None):
+    """Tout ce que CELCAT connait entre deux dates (par defaut : tout).
+
+    C'est la reponse a « combien d'heures de VBA ce semestre ? » — que la
+    vue par semaine ne peut pas donner. Les bornes reelles sont celles des
+    cours trouves, pas celles demandees : on ne dessine pas de semaines vides
+    aux deux bouts.
+    """
+    vrais = [c for c in cours if c.est_cours
+             and (debut is None or c.jour >= debut)
+             and (fin is None or c.jour <= fin)]
+    if not vrais:
+        auj = date.today()
+        return Bilan(debut or auj, fin or auj, (), 0.0, 0, (), 0.0, ())
+
+    debut = min(c.jour for c in vrais)
+    fin = max(c.jour for c in vrais)
+
+    par_matiere = {}
+    for c in vrais:
+        nom = _nom_matiere(c)
+        entree = par_matiere.setdefault(nom, {"minutes": 0.0, "seances": 0, "types": {}})
+        entree["minutes"] += c.minutes
+        entree["seances"] += 1
+        type_ = _type_de(c)
+        entree["types"][type_] = entree["types"].get(type_, 0) + c.minutes
+    matieres = tuple(sorted(
+        (Part(nom=nom, minutes=v["minutes"], seances=v["seances"], par_type=v["types"])
+         for nom, v in par_matiere.items()),
+        key=lambda p: (-p.minutes, p.nom)))
+
+    semaines, lundi = [], celcat.semaine_de(debut)
+    while lundi <= fin:
+        de_la_semaine = [c for c in vrais if lundi <= c.jour <= lundi + timedelta(days=6)]
+        semaines.append((lundi, sum(c.minutes for c in de_la_semaine), len(de_la_semaine)))
+        lundi += timedelta(days=7)
+
+    return Bilan(
+        debut=debut, fin=fin, matieres=matieres,
+        total_minutes=sum(c.minutes for c in vrais), seances=len(vrais),
+        semaines=tuple(semaines),
+        distanciel_minutes=sum(c.minutes for c in vrais if c.a_distance),
+        examens=tuple(c for c in vrais if c.est_examen),
+    )
+
+
+def par_type_semaine(cours, lundi):
+    """{type: minutes} pour une semaine : ce que la barre d'une semaine empile."""
+    sortie = {}
+    for c in cours:
+        if c.est_cours and lundi <= c.jour <= lundi + timedelta(days=6):
+            type_ = _type_de(c)
+            sortie[type_] = sortie.get(type_, 0) + c.minutes
+    return sortie
+
+
+def bloc_bilan(b):
+    """Le bilan en texte, quand Pillow manque."""
+    if b.vide:
+        return ["CELCAT ne connaît aucun cours pour l'instant."]
+    lignes = [f"**{vue.duree_fr(b.total_minutes)} de cours** {b.libelle} · "
+              f"{b.seances} séances · {b.nb_semaines} semaines",
+              f"↳ **{vue.duree_fr(b.moyenne_semaine)}** par semaine en moyenne"]
+    pleine = b.semaine_pleine
+    if pleine:
+        lignes.append(f"↳ semaine la plus chargée : **du {pleine[0]:%d/%m}**, "
+                      f"{vue.duree_fr(pleine[1])}")
+    if b.distanciel_minutes:
+        lignes.append(f"↳ {vue.duree_fr(b.distanciel_minutes)} à distance "
+                      f"({b.part_distanciel:.0f} %)")
+    if b.examens:
+        lignes.append(f"↳ ⚠️ {len(b.examens)} examen{'s' if len(b.examens) > 1 else ''}")
+    lignes += ["", "**Heures par matière**"]
+    for p in b.matieres[:12]:
+        lignes.append(f"`{_barre(p.part_de(b.total_minutes))}` "
+                      f"**{vue.duree_fr(p.minutes)}** · {p.nom} "
+                      f"({p.part_de(b.total_minutes):.0f} %, {p.seances} séance"
+                      f"{'s' if p.seances > 1 else ''})")
+    if len(b.matieres) > 12:
+        reste = sum(p.minutes for p in b.matieres[12:])
+        lignes.append(f"`{_barre(reste / b.total_minutes * 100)}` "
+                      f"**{vue.duree_fr(reste)}** · {len(b.matieres) - 12} autres")
+    return lignes
+
+
 # --- L'historique ------------------------------------------------------------
 # CELCAT ne sert que l'avenir : la semaine passee sort de l'horizon et devient
 # impossible a recalculer. On garde donc le total au passage, une ligne par

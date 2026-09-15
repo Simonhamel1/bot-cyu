@@ -678,6 +678,8 @@ def construire_parseur():
     sp = sous.add_parser("stats", help="ce que pese une semaine, en PNG")
     sp.add_argument("--semaine", type=int, default=0,
                     help="0 = cette semaine, 1 = la prochaine, -1 = la passee")
+    sp.add_argument("--tout", action="store_true",
+                    help="tout l'emploi du temps connu, matiere par matiere")
     sp.add_argument("--sortie", default=str(config.RACINE / "stats.png"))
     sp.add_argument("--discord", action="store_true",
                     help="poster l'image dans #annonces")
@@ -848,6 +850,21 @@ def main():
         print(vue.sans_markdown("\n".join(lignes)) + "\n")
         try:
             print(f"Image : {image.rendre_changements(liste, args.sortie)}")
+        except image.PillowManquant:
+            pass
+    elif cmd == "stats" and args.tout:
+        b = stats.bilan(cours)
+        lignes = stats.bloc_bilan(b)
+        if args.discord:
+            envoyer_photo("📚 Tout l'emploi du temps", lignes[:1],
+                          lambda: image.rendre_bilan(b, args.sortie, cours=cours),
+                          couleur="info", canal="annonces", secours=lignes)
+            print("envoye.")
+            return
+        print("\n=== Tout l'emploi du temps ===")
+        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        try:
+            print(f"Image : {image.rendre_bilan(b, args.sortie, cours=cours)}")
         except image.PillowManquant:
             pass
     elif cmd == "stats":

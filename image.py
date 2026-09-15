@@ -1418,6 +1418,9 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
 
     jours_montres = [j for j in s.jours if not j.vide or j.jour.weekday() < 5]
     maxi_jour = max([j.amplitude for j in jours_montres] + [60])
+    # « 7 h 45  +1 h 15 » est deux fois plus large que « 6 h » : la zone des
+    # barres s'arrete plus tot, sinon l'etiquette ecrit sur la barre pleine.
+    x_fin = LARGEUR_STATS - MARGE - 140
     haut_zone = y
     for j in jours_montres:
         toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
@@ -1473,3 +1476,143 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
                     f"{vue.duree_fr(moyenne)}")
     return toile.finir(chemin or (config.DONNEES / "stats.png"),
                        _pied(toile, y + 4, note))
+
+
+# --- Le bilan : tout l'emploi du temps connu ---------------------------------
+def rendre_bilan(b, chemin=None, cours=None):
+    """Le poids de TOUT ce que CELCAT connait : heures par matiere, et la
+    charge semaine par semaine. C'est la reponse a « combien d'heures de VBA
+    ce semestre », que la vue d'une semaine ne peut pas donner.
+
+    Meme grammaire que rendre_stats() : tuiles, barres empilees par type,
+    grille recessive. Un lecteur qui connait l'une lit l'autre.
+    """
+    import stats as st
+
+    toile = Toile(LARGEUR_STATS,
+                  380 + 34 * max(len(b.matieres), 1) + 34 * max(len(b.semaines), 1) + 200)
+    y = _entete(toile, "Tout l'emploi du temps",
+                f"{b.libelle} · {b.seances} séances · "
+                f"{b.nb_semaines} semaine{'s' if b.nb_semaines > 1 else ''} avec cours")
+
+    if b.vide:
+        toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 90], fond=CARTE, rayon=RAYON)
+        toile.texte(LARGEUR_STATS / 2, y + 32, "CELCAT ne connaît aucun cours.",
+                    19, True, TEXTE_MOYEN, aligne="centre")
+        return toile.finir(chemin or (config.DONNEES / "bilan.png"),
+                           _pied(toile, y + 110))
+
+    # --- Etage 1 : les quatre chiffres --------------------------------------
+    pleine = b.semaine_pleine
+    plus_lourde = b.matieres[0]
+    largeur_tuile = (LARGEUR_STATS - 2 * MARGE - 3 * 12) / 4
+    tuiles = [
+        ("Total de cours", vue.duree_fr(b.total_minutes),
+         f"{b.seances} séances", ACCENT),
+        ("Par semaine", vue.duree_fr(b.moyenne_semaine),
+         f"la plus chargée : {vue.duree_fr(pleine[1])}" if pleine else "",
+         COULEURS["TD"]),
+        ("Matières", str(len(b.matieres)),
+         f"la plus lourde : {plus_lourde.nom}"[:40], COULEURS["TP"]),
+        ("À distance", vue.duree_fr(b.distanciel_minutes) if b.distanciel_minutes else "aucun",
+         f"{b.part_distanciel:.0f} % du total" if b.distanciel_minutes else "tout en présentiel",
+         COULEUR_DISTANCE),
+    ]
+    for i, (titre, valeur, detail, accent) in enumerate(tuiles):
+        _tuile(toile, MARGE + i * (largeur_tuile + 12), y, largeur_tuile, 96,
+               titre, valeur, detail, accent)
+    y += 96 + 18
+
+    if b.examens:
+        toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 40], fond=CARTE, rayon=10)
+        toile.rect([MARGE, y, MARGE + 5, y + 40], fond=COULEURS["EXAMEN"], rayon=3)
+        quand = ", ".join(f"{vue.jour_fr(c.jour, court=True)}" for c in b.examens[:5])
+        toile.texte(MARGE + 18, y + 11,
+                    f"{len(b.examens)} examen{'s' if len(b.examens) > 1 else ''} "
+                    f"dans la période — {quand}", 14, True, TEXTE,
+                    largeur_max=LARGEUR_STATS - 2 * MARGE - 40)
+        y += 52
+
+    # --- Etage 2 : les heures par matiere, en part du total -----------------
+    toile.texte(MARGE, y, "Heures par matière", 16, True, TEXTE)
+    toile.texte(LARGEUR_STATS - MARGE, y + 3,
+                f"le pourcentage est la part du total de {vue.duree_fr(b.total_minutes)}",
+                11.5, False, TEXTE_FAIBLE, aligne="droite")
+    y += 28
+
+    montrees = list(b.matieres[:12])
+    reste = b.matieres[12:]
+    maxi = max([p.minutes for p in montrees] +
+               ([sum(p.minutes for p in reste)] if reste else []))
+    x_label, x_bar = MARGE + 4, MARGE + 210
+    x_fin = LARGEUR_STATS - MARGE - 86
+    largeur_nom = x_bar - x_label - 52
+
+    haut_zone = y
+    for _ in montrees + ([None] if reste else []):
+        toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
+        y += 34
+    _axe_heures(toile, x_bar, x_fin, haut_zone + 2, y - 8, maxi)
+
+    y = haut_zone
+    for p in montrees:
+        toile.texte(x_label, y + 3, p.nom, 13.5, False, TEXTE, largeur_max=largeur_nom)
+        segments = [(nom, p.par_type[nom]) for nom in ORDRE_TYPES if nom in p.par_type]
+        segments += [(nom, m) for nom, m in p.par_type.items() if nom not in ORDRE_TYPES]
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18, segments, maxi)
+        toile.texte(x_bar - 10, y + 5, f"{p.part_de(b.total_minutes):.0f} %", 11.5,
+                    False, TEXTE_FAIBLE, aligne="droite")
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(p.minutes),
+                    13.5, True, TEXTE, aligne="droite")
+        y += 34
+    if reste:
+        minutes = sum(p.minutes for p in reste)
+        toile.texte(x_label, y + 3, f"{len(reste)} autres matières", 13.5, False,
+                    TEXTE_FAIBLE, largeur_max=largeur_nom)
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18, [("autre", minutes)], maxi)
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(minutes), 13.5,
+                    True, TEXTE_MOYEN, aligne="droite")
+        y += 34
+    y += 24
+
+    # --- Etage 3 : semaine par semaine --------------------------------------
+    toile.texte(MARGE, y, "Semaine par semaine", 16, True, TEXTE)
+    y += 28
+    maxi_semaine = max([m for _, m, _ in b.semaines] + [60])
+    cette = celcat.semaine_de(date.today())
+    x_fin = LARGEUR_STATS - MARGE - 190       # place pour « 30 h 15 · 12 séances »
+    haut_zone = y
+    for _ in b.semaines:
+        toile.rect([x_bar, y + 4, x_fin, y + 22], fond=CARTE, rayon=4)
+        y += 34
+    _axe_heures(toile, x_bar, x_fin, haut_zone + 2, y - 8, maxi_semaine)
+
+    y = haut_zone
+    for lundi, minutes, seances in b.semaines:
+        etiquette = f"du {lundi:%d/%m} au {(lundi + timedelta(days=6)):%d/%m}"
+        toile.texte(x_label, y + 3, etiquette, 13.5, lundi == cette,
+                    TEXTE if minutes else TEXTE_FAIBLE)
+        if not minutes:
+            toile.texte(x_bar + 8, y + 5, "rien de prévu", 12, False, TEXTE_FAIBLE)
+            y += 34
+            continue
+        par_type = st.par_type_semaine(cours or [], lundi) if cours else {}
+        segments = [(nom, par_type[nom]) for nom in ORDRE_TYPES if nom in par_type]
+        segments += [(nom, m) for nom, m in par_type.items() if nom not in ORDRE_TYPES]
+        _barre_empilee(toile, x_bar, x_fin, y + 4, 18,
+                       segments or [("autre", minutes)], maxi_semaine)
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4,
+                    f"{vue.duree_fr(minutes)}  ·  {seances} séance{'s' if seances > 1 else ''}",
+                    13, True, TEXTE, aligne="droite")
+        y += 34
+    y += 18
+
+    types, vus = [], set()
+    for p in b.matieres:
+        for nom in ORDRE_TYPES + list(p.par_type):
+            if nom in p.par_type and nom not in vus:
+                vus.add(nom)
+                types.append((nom, _couleur_type(nom)))
+    y = _legende(toile, y, types)
+    return toile.finir(chemin or (config.DONNEES / "bilan.png"),
+                       _pied(toile, y + 4, "tout ce que CELCAT connaît à ce jour"))
