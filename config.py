@@ -295,6 +295,9 @@ SONDAGE_DUREE_HEURES = min(768, max(1, _entier(_classe, "sondage_duree_heures", 
 SONDAGE_RESULTATS = _bool(_classe, "sondage_resultats", True)
 # Le dimanche dans #predictions : ce qu'il reste a trancher, et le classement.
 RECAP_PREDICTIONS = _bool(_classe, "recap_predictions", True)
+# Le classeur M3C de la promo, pour /ects. Vide = le premier « M3C*.xlsx »
+# trouve a cote du bot : deposer le fichier suffit, sans rien regler ici.
+MAQUETTE_FICHIER = _txt(_classe, "maquette", "")
 
 
 # --- Matieres ----------------------------------------------------------------

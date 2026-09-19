@@ -24,6 +24,7 @@ C'est le fichier a lancer au quotidien. Un seul processus fait les deux choses :
     /anniversaire(s)    le tien, et les prochains de la promo
     /meteo [jours]      le temps, et s'il faut un parapluie pour ton trajet
     /libre              tes creneaux libres
+    /ects [semestre]    la maquette : UE, matieres, ECTS, coefficients
     /statut             l'assistant tourne-t-il, fraicheur des donnees
     /rafraichir         relire CELCAT tout de suite
     /panneau            epingle le panneau de boutons dans un salon
@@ -87,6 +88,7 @@ import devoirs as dv
 import evenements as ev
 import image as img
 import interface as ui
+import maquette as mq
 import meteo
 import notif
 import predictions as pr
@@ -154,6 +156,12 @@ SUGGESTIONS_RAPPEL = ["dans 1h", "dans 2h", "ce soir", "demain 9h", "demain 18h"
 # Les actions qui repondent TOUJOURS en prive, meme depuis une carte publique :
 # la liste de TES rappels n'a rien a faire a la place d'un message de tous.
 ACTIONS_PRIVEES = ("rap", "rapsel", "anniv")
+
+# Meme chose, mais pour un seul bouton d'une action : (action, 1er argument).
+# Telecharger la maquette ne concerne que celui qui clique, alors que passer
+# du semestre 1 au semestre 2 est une navigation ordinaire, qui a le droit de
+# reecrire la carte publique.
+SOUS_ACTIONS_PRIVEES = {("ects", "dl")}
 
 # Ce que /edt propose pendant la frappe. Ce ne sont QUE des suggestions : le
 # champ reste libre, donc « 12/10 » ou « +21 » marchent sans figurer ici.
@@ -847,6 +855,176 @@ async def vue_examens():
     sous = (f"{len(liste)} à venir · le premier {vue.jour_relatif(premier['quand'].date())}")
     return carte("Examens — compte à rebours", lignes, teinte, sous_titre=sous,
                  boutons=boutons), []
+
+
+# --- La maquette : ce que chaque matiere pese --------------------------------
+def _semestre_courant():
+    """Le semestre en cours : S1 de septembre a janvier, S2 de fevrier a aout.
+
+    Les vraies dates de bascule changent chaque annee et ne sont dans aucun
+    fichier qu'on lise. Ce decoupage grossier ne sert qu'a choisir le semestre
+    qui s'ouvre en premier ; les deux boutons sont la pour l'autre.
+    """
+    return 1 if date.today().month in (9, 10, 11, 12, 1) else 2
+
+
+def _quoi_ects(quoi):
+    """« 1 », « 2 » ou « annee ». Tout le reste retombe sur le semestre en cours,
+    y compris un bouton d'un vieux message qui aurait porte autre chose."""
+    quoi = str(quoi or "").strip().lower()
+    if quoi in ("annee", "année", "an", "tout"):
+        return "annee"
+    return quoi if quoi in ("1", "2") else str(_semestre_courant())
+
+
+def _sans_maquette(souci):
+    """Il n'y a pas de classeur M3C : on dit lequel, et ou le poser.
+
+    Une commande qui repond « erreur » sans dire quoi faire est une commande
+    morte : ici l'utilisateur a besoin d'un nom de fichier et d'un dossier.
+    """
+    return carte(
+        "Maquette",
+        [f"Je n'ai pas trouvé la maquette de la promo. {souci}",
+         "",
+         "**Comment la mettre en place**",
+         "Dépose le classeur M3C de l'année (le fichier `.xlsx` publié par "
+         "l'école) à la racine du bot, à côté de `bot.py`. Tout nom qui "
+         "commence par `M3C` est reconnu.",
+         "-# Un autre emplacement ? `classe.maquette:` dans `config.yaml` "
+         "prend un chemin explicite.",
+         "-# Le fichier est relu à chaque changement : une nouvelle version "
+         "remplace l'ancienne sans redémarrer le bot."],
+        "alerte"), []
+
+
+def _boutons_ects(quoi, m=None):
+    """Les quatre boutons de /ects. Celui qu'on regarde est en bleu — un
+    bouton actif qui renvoie a la page affichee doit au moins se signaler."""
+    boutons = []
+    for s in (m.semestres if m else []):
+        n = str(s.numero)
+        boutons.append(_b(s.nom, "ects", n, style="bleu" if quoi == n else "gris",
+                          emoji="📘"))
+    boutons.append(_b("L'année", "ects", "annee",
+                      style="bleu" if quoi == "annee" else "gris", emoji="🎓"))
+    boutons.append(_b("Télécharger", "ects", "dl", quoi, style="vert", emoji="⬇️"))
+    return boutons
+
+
+def _image_ects(m, quoi):
+    """La fonction de dessin de la vue demandee, prete pour _rendu()."""
+    if quoi == "annee":
+        return lambda chemin: img.rendre_ects_annee(m, chemin)
+    return lambda chemin: img.rendre_ects(m, int(quoi), chemin)
+
+
+def _nom_ects(quoi):
+    """Le nom du fichier tel qu'il arrive dans les telechargements de celui qui
+    clique : « maquette-semestre-1.png » se retrouve, « image-a3f9.png » non."""
+    return "maquette-annee" if quoi == "annee" else f"maquette-semestre-{quoi}"
+
+
+async def vue_ects(quoi=""):
+    """La maquette en photo : les UE, les matieres, les ECTS, les coefficients.
+
+    Huit colonnes de chiffres ne tiennent pas en Markdown sur un telephone —
+    d'ou l'image. Le texte reste le repli quand Pillow manque, et il dit alors
+    la meme chose, en moins dense.
+    """
+    try:
+        m = await asyncio.to_thread(mq.charger)
+    except (mq.MaquetteIntrouvable, OSError) as e:
+        return _sans_maquette(e)
+
+    quoi = _quoi_ects(quoi)
+    boutons = _boutons_ects(quoi, m)
+    if quoi == "annee":
+        titre = "Maquette de l'année"
+        sous = (f"{m.entete} · {mq.nombre_fr(m.ects)} ECTS · "
+                f"{len(m.semestres)} semestres")
+    else:
+        s = m.semestre(int(quoi))
+        if s is None:
+            return _sans_maquette(f"Le semestre {quoi} n'y figure pas.")
+        evaluees = [e for e in s.matieres if e.evalue]
+        titre = f"Maquette — {s.nom}"
+        sous = (f"{mq.nombre_fr(s.ects)} ECTS · {len(s.ues)} UE · "
+                f"{len(evaluees)} matières · {mq.nombre_fr(s.heures)} h de cours")
+
+    # Le classeur dit lui-meme quand un chiffre est une hypothese : on le
+    # repete sous le tableau. Des heures reconstituees presentees comme
+    # certaines seraient pires que pas d'heures du tout.
+    pied = ("certains volumes horaires du classeur sont des hypothèses, "
+            "à vérifier sur le fichier officiel" if m.reserves else None)
+
+    fichier, souci = await _rendu(_image_ects(m, quoi), nom=_nom_ects(quoi))
+    if fichier is None:
+        # Sans image, le texte : les UE et leurs matieres, sans les colonnes
+        # de chiffres qui ne survivent pas a un ecran etroit.
+        lignes = []
+        for s in (m.semestres if quoi == "annee" else [m.semestre(int(quoi))]):
+            lignes += mq.bloc_semestre(s, detail=quoi != "annee") + [""]
+        return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
+                     pied=souci), []
+    return carte(titre, [], "info", sous_titre=sous, image=fichier,
+                 boutons=boutons, pied=pied), [fichier]
+
+
+async def vue_ects_telechargement(quoi=""):
+    """Le bouton « Télécharger » : la photo en piece jointe, et le classeur.
+
+    Deux fichiers pour deux usages : le PNG se renvoie a quelqu'un dans une
+    conversation, le classeur s'ouvre dans Excel ou LibreOffice pour trier,
+    filtrer, ou recopier une colonne. Rendre l'un sans l'autre obligerait a
+    retourner chercher le fichier a la main.
+    """
+    try:
+        m = await asyncio.to_thread(mq.charger)
+    except (mq.MaquetteIntrouvable, OSError) as e:
+        return _sans_maquette(e)
+
+    quoi = _quoi_ects(quoi)
+    quelle = "l'année entière" if quoi == "annee" else f"le semestre {quoi}"
+    de_quelle = "de l'année entière" if quoi == "annee" else f"du semestre {quoi}"
+    fichiers, lignes = [], []
+
+    fichier, souci = await _rendu(_image_ects(m, quoi), nom=_nom_ects(quoi))
+    if fichier is not None:
+        # Un nom fixe, sans le suffixe anti-collision de _rendu : ce fichier
+        # part dans les telechargements de quelqu'un, il doit y etre relisible.
+        fichier.filename = f"{_nom_ects(quoi)}.png"
+        fichiers.append(fichier)
+        lignes.append(f"**{fichier.filename}** — le tableau {de_quelle}, en image.")
+    else:
+        lignes.append(f"⚠️ L'image n'a pas pu être faite : {souci}")
+
+    source = m.source
+    if source is not None:
+        try:
+            octets = await asyncio.to_thread(source.read_bytes)
+        except OSError as e:
+            lignes.append(f"⚠️ Le classeur n'a pas pu être lu : {e}")
+        else:
+            # Discord refuse au-dela de 10 Mo sur un serveur non booste, et
+            # refuse tout le message avec : mieux vaut l'image seule.
+            if len(octets) > 9_000_000:
+                lignes.append(f"-# Le classeur `{source.name}` fait "
+                              f"{len(octets) // 1_000_000} Mo : trop lourd pour "
+                              f"Discord, va le chercher sur le serveur du bot.")
+            else:
+                fichiers.append(discord.File(io.BytesIO(octets), filename=source.name))
+                lignes.append(f"**{source.name}** — le classeur source, à ouvrir "
+                              f"dans Excel ou LibreOffice.")
+
+    lignes.append("-# Ces fichiers ne sont visibles que par toi. Clique sur l'un "
+                  "d'eux pour l'enregistrer.")
+    vue_ = carte("Maquette — à télécharger", lignes, "calme",
+                 sous_titre=f"{m.entete} · {quelle}",
+                 telechargements=fichiers,
+                 boutons=[_b("Revoir le tableau", "ects", quoi, style="bleu",
+                             emoji="📊")])
+    return vue_, fichiers
 
 
 # --- Les paris de l'assistant ------------------------------------------------
@@ -1755,7 +1933,7 @@ def vue_panneau():
              "visibles que par toi, et chacune a ses propres boutons pour "
              "naviguer.",
              "-# Tu peux aussi taper les commandes : `/edt` `/devoirs` `/stats` "
-             "`/examens` `/sondage` `/rappel` — et `/help` pour tout voir"]
+             "`/examens` `/ects` `/sondage` `/rappel` — et `/help` pour tout voir"]
     menu = ui.Menu("jour", "Voir un jour de la semaine…",
                    [(j.capitalize(), str(i), None, "📆") for i, j in enumerate(vue.JOURS)]
                    + [("La semaine prochaine", "prochaine", None, "🗓️"),
@@ -1776,6 +1954,10 @@ def vue_panneau():
          _b("Prédictions", "pan", "prediction", emoji="🔮"),
          _b("Parier", "pred", "ajout", style="vert", emoji="🎲"),
          _b("Sondage", "son", "ajout", style="vert", emoji="📊")],
+        # La maquette n'apparait que si le classeur M3C est la : un bouton qui
+        # ne sait que s'excuser n'a rien a faire sur le panneau.
+        ([_b("ECTS et coefficients", "pan", "ects", emoji="📘")]
+         if mq.disponible() else []),
         [_b("Rappel", "rap", "ajout", emoji="⏰"),
          _b("Mes rappels", "pan", "rappels", emoji="📋"),
          _b("Anniversaires", "pan", "anniv", emoji="🎂"),
@@ -1823,6 +2005,10 @@ def texte_aide():
         "trous, devoirs, et ce qui bouge par matière",
         "`/examens` — **compte à rebours** avant chaque examen, CELCAT et ton "
         "carnet réunis, avec le temps libre pour réviser d'ici là",
+        "`/ects` — **la maquette de la promo en photo** : chaque UE, chaque "
+        "matière, ce qu'elle vaut en ECTS, son coefficient, ses heures et la "
+        "façon dont elle est évaluée (contrôle continu ou examen terminal). "
+        "Un bouton **⬇️ Télécharger** rend l'image et le classeur source",
         "`/prediction` — **vos prédictions** 🔮 : qui va valider l'année, quel cours "
         "va sauter… chacun vote 👍👎, l'auteur tranche, le classement juge. "
         "`/parier` pour en poser une. Les paris de l'assistant 🤖 (chiffres réels) "
@@ -2037,7 +2223,8 @@ async def _agir(inter, args, valeurs, action):
     # Ce qui ne regarde que celui qui clique (ses rappels, son anniversaire)
     # repond en prive, meme depuis une carte publique : on ne remplace pas un
     # message de tous par la liste de quelqu'un.
-    if action in ACTIONS_PRIVEES:
+    if action in ACTIONS_PRIVEES or \
+            (action, args[0] if args else "") in SOUS_ACTIONS_PRIVEES:
         await inter.response.defer(ephemeral=True, thinking=True)
         vue_, fichiers = await _vue_navigation(action, args, valeurs, inter)
         await repondre(inter, vue_, fichiers, ephemere=True)
@@ -2092,6 +2279,8 @@ async def _vue_panneau(args, valeurs, inter=None):
         return await vue_libre(7)
     if quoi == "examens":
         return await vue_examens()
+    if quoi == "ects":
+        return await vue_ects()
     if quoi == "comparer":
         return await vue_comparer(celcat.semaine_de(auj))
     if quoi == "prediction":
@@ -2137,6 +2326,10 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         return await vue_comparer(_date(args[0]))
     if action == "examens":
         return await vue_examens()
+    if action == "ects":
+        if args[:1] == ["dl"]:
+            return await vue_ects_telechargement(args[1] if len(args) > 1 else "")
+        return await vue_ects(args[0] if args else "")
     if action == "paris":
         return await vue_paris_assistant()
     if action == "pred":
@@ -2402,6 +2595,19 @@ async def cmd_comparer(inter: discord.Interaction, quand: int = 0):
 @bot.tree.command(name="examens", description="Compte à rebours avant chaque examen")
 async def cmd_examens(inter: discord.Interaction):
     await _commande(inter, vue_examens())
+
+
+@bot.tree.command(name="ects",
+                  description="La maquette en photo : UE, matières, ECTS, coefficients, évaluation")
+@app_commands.describe(
+    semestre="lequel — le semestre en cours par défaut, ou l'année entière")
+@app_commands.choices(semestre=[
+    app_commands.Choice(name="Semestre 1", value="1"),
+    app_commands.Choice(name="Semestre 2", value="2"),
+    app_commands.Choice(name="L'année entière (les UE, sans le détail)", value="annee"),
+])
+async def cmd_ects(inter: discord.Interaction, semestre: str = ""):
+    await _commande(inter, vue_ects(semestre))
 
 
 @bot.tree.command(name="prediction",

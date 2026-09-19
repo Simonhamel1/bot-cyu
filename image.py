@@ -1616,3 +1616,264 @@ def rendre_bilan(b, chemin=None, cours=None):
     y = _legende(toile, y, types)
     return toile.finir(chemin or (config.DONNEES / "bilan.png"),
                        _pied(toile, y + 4, "tout ce que CELCAT connaît à ce jour"))
+
+
+# =============================================================================
+# La maquette : ce que chaque matiere PESE
+# =============================================================================
+# Un tableau de maquette est fait pour etre lu de travers : on y cherche une
+# ligne (« combien vaut l'econometrie ? »), rarement le tout. La mise en page
+# sert donc la recherche d'une ligne : les ECTS sont la colonne la plus
+# contrastee, l'intitule est a gauche, et chaque UE porte une couleur qui la
+# separe de la suivante sans qu'on ait a lire son code.
+LARGEUR_ECTS = 1000
+
+# Une couleur par UE, prises dans la palette deja testee pour le daltonisme
+# (voir COULEURS). L'ordre est fixe : la 3e UE d'un semestre a la meme teinte
+# d'un semestre a l'autre, donc la couleur ne veut rien dire toute seule — elle
+# ne sert qu'a decouper le tableau en blocs.
+TEINTES_UE = [COULEURS["CM"], COULEURS["TD"], COULEURS["TP"], COULEURS["PROJET"],
+              COULEURS[""], COULEUR_DISTANCE]
+
+# Le mode d'evaluation, en couleur : le controle continu est une bonne
+# nouvelle (des notes etalees), l'examen terminal joue tout sur un jour.
+COULEURS_CONTROLE = {
+    "CC": COULEURS["TD"], "CCI": COULEURS["TD"], "ET": COULEURS["EXAMEN"],
+    "CC + ET": COULEURS[""], "REPORT": COULEURS["TP"],
+}
+
+
+def _couleur_controle(controle):
+    cle = str(controle).strip().upper()
+    if not cle or cle.startswith("NON"):
+        return TRAIT_FORT
+    return COULEURS_CONTROLE.get(cle, COULEURS["PROJET"])
+
+
+def _nb(valeur, vide="·"):
+    """Un nombre de la maquette : « 31,5 », « 24 », ou un point quand c'est
+    zero. Ecrire « 0 » partout remplirait le tableau de bruit."""
+    if not valeur:
+        return vide
+    return f"{float(valeur):.1f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+# Les colonnes, une fois pour toutes : (bord droit, largeur du titre).
+# Tout est aligne a DROITE pour les nombres — deux colonnes de chiffres
+# alignees a gauche ne se comparent pas d'un coup d'oeil.
+_X_NOM = MARGE + 18
+_X_LANGUE = 486
+_X_CM, _X_TD, _X_TP, _X_AUTRE = 606, 656, 706, 766
+_X_ECTS, _X_COEF = 836, 886
+_X_CONTROLE = 900
+_LARGEUR_NOM = _X_LANGUE - _X_NOM - 12
+
+
+def _entete_colonnes(toile, y):
+    """La ligne de titres de colonnes, en petites capitales grises."""
+    petit = 10
+    toile.texte(_X_NOM, y, "MATIÈRE", petit, True, TEXTE_FAIBLE)
+    toile.texte(_X_LANGUE, y, "LANGUE", petit, True, TEXTE_FAIBLE)
+    for x, nom in ((_X_CM, "CM"), (_X_TD, "TD"), (_X_TP, "TP"),
+                   (_X_AUTRE, "AUTRE"), (_X_ECTS, "ECTS"), (_X_COEF, "COEF")):
+        toile.texte(x, y, nom, petit, True, TEXTE_FAIBLE, aligne="droite")
+    toile.texte(_X_CONTROLE, y, "ÉVALUATION", petit, True, TEXTE_FAIBLE)
+    y += 16
+    toile.ligne([MARGE, y, LARGEUR_ECTS - MARGE, y], TRAIT)
+    return y + 8
+
+
+def _ligne_ec(toile, y, ec, couleur_ue):
+    """Une matiere : son intitule, ses heures, son poids, son evaluation."""
+    hauteur = 30
+    evalue = ec.evalue
+    texte_principal = TEXTE if evalue else TEXTE_FAIBLE
+
+    if ec.sae:
+        # Une SAE n'est pas un cours : elle n'a pas d'heures en amphi, et la
+        # confondre avec une matiere fausse la lecture du tableau.
+        toile.texte(_X_NOM, y + 6, ec.intitule, 13.5, True, texte_principal,
+                    largeur_max=_LARGEUR_NOM - 44)
+        toile.pastille(_X_NOM + min(toile.largeur_texte(ec.intitule, 13.5, True),
+                                    _LARGEUR_NOM - 44) + 8, y + 5, "SAE",
+                       _assombrir(COULEURS["PROJET"], 0.15), taille=9.5, hauteur=16)
+    else:
+        toile.texte(_X_NOM, y + 6, ec.intitule, 13.5, False, texte_principal,
+                    largeur_max=_LARGEUR_NOM)
+
+    if ec.langue:
+        toile.texte(_X_LANGUE, y + 7, ec.langue, 11.5, False, TEXTE_FAIBLE,
+                    largeur_max=_X_CM - _X_LANGUE - 40)
+    for x, valeur in ((_X_CM, ec.cm), (_X_TD, ec.td), (_X_TP, ec.tp),
+                      (_X_AUTRE, ec.autre)):
+        toile.texte(x, y + 7, _nb(valeur), 12.5, False,
+                    TEXTE_MOYEN if valeur else TRAIT_FORT, aligne="droite")
+
+    # Les ECTS sont la colonne qu'on vient chercher : seule a etre en gras, et
+    # dans la couleur de l'UE quand la matiere compte vraiment.
+    toile.texte(_X_ECTS, y + 5, _nb(ec.ects) if evalue else "—", 14.5, True,
+                _eclaircir(couleur_ue, 0.45) if evalue else TEXTE_FAIBLE,
+                aligne="droite")
+    toile.texte(_X_COEF, y + 7, _nb(ec.coef) if evalue else "—", 12.5, False,
+                TEXTE_MOYEN, aligne="droite")
+
+    if ec.controle:
+        etiquette = ec.controle if evalue else "non évalué"
+        toile.pastille(_X_CONTROLE, y + 5, etiquette, _couleur_controle(ec.controle),
+                       taille=10.5, hauteur=19)
+    return hauteur
+
+
+def _bandeau_ue(toile, y, ue, couleur, total_ects):
+    """Le titre d'une UE : son code, son intitule, son poids, et une barre qui
+    montre la part qu'elle prend dans le semestre."""
+    hauteur = 42
+    toile.rect([MARGE, y, LARGEUR_ECTS - MARGE, y + hauteur],
+               fond=_melanger(CARTE, couleur, 0.16), rayon=10)
+    toile.rect([MARGE, y + 6, MARGE + 5, y + hauteur - 6], fond=couleur, rayon=3)
+
+    largeur = toile.pastille(MARGE + 16, y + 11, ue.code, _assombrir(couleur, 0.1),
+                             taille=11, hauteur=20)
+    toile.texte(MARGE + 16 + largeur + 10, y + 11, ue.intitule, 15.5, True, TEXTE,
+                largeur_max=_X_CM - MARGE - largeur - 60)
+
+    # La barre de part : sa longueur est la part de l'UE dans les 30 ECTS du
+    # semestre. Elle repond a « laquelle pese le plus » sans lire un chiffre.
+    x0, x1 = _X_CM - 30, _X_ECTS - 74
+    if total_ects > 0 and x1 > x0:
+        toile.rect([x0, y + 17, x1, y + 25], fond=CARTE, rayon=4)
+        fin = x0 + (x1 - x0) * (ue.ects / total_ects)
+        toile.rect([x0, y + 17, max(fin, x0 + 4), y + 25], fond=couleur, rayon=4)
+        toile.texte(x1 + 8, y + 14, f"{round(100 * ue.ects / total_ects)} %", 11,
+                    False, TEXTE_FAIBLE)
+
+    toile.texte(_X_ECTS, y + 8, _nb(ue.ects), 19, True, TEXTE, aligne="droite")
+    toile.texte(_X_ECTS + 6, y + 15, "ECTS", 10, True, TEXTE_FAIBLE)
+    heures = ue.heures
+    toile.texte(LARGEUR_ECTS - MARGE - 16, y + 13,
+                f"{_nb(heures, '0')} h" if heures else "en entreprise", 12.5,
+                False, TEXTE_MOYEN, aligne="droite")
+    return hauteur
+
+
+def rendre_ects(m, numero=1, chemin=None):
+    """Le detail d'un semestre : chaque UE, chaque matiere, ce qu'elle pese.
+
+    `m` est une maquette.Maquette deja lue — ce module dessine, il ne lit
+    aucun fichier. Le tableau tient en une image plutot qu'en vingt lignes de
+    texte : sur un telephone, huit colonnes en Markdown deviennent illisibles
+    des la premiere matiere au nom long.
+    """
+    import maquette as mq
+
+    s = m.semestre(numero)
+    if s is None:
+        raise ValueError(f"le semestre {numero} n'est pas dans la maquette")
+
+    lignes = sum(len(u.ecs) for u in s.ues)
+    toile = Toile(LARGEUR_ECTS, 320 + 56 * len(s.ues) + 32 * lignes + 200)
+
+    evaluees = [e for e in s.matieres if e.evalue]
+    y = _entete(toile, f"Maquette — {s.nom}",
+                f"{m.entete} · {len(s.ues)} UE · "
+                f"{len(evaluees)} matières évaluées")
+
+    # --- Les quatre chiffres du semestre ------------------------------------
+    terminaux = [e for e in evaluees if "ET" in e.controle.upper().split()]
+    continu = [e for e in evaluees if e.controle.upper().startswith("CC")]
+    entreprise = sum(e.ects for e in s.matieres if not e.heures and e.evalue)
+    largeur_tuile = (LARGEUR_ECTS - 2 * MARGE - 3 * 12) / 4
+    tuiles = [
+        ("Crédits du semestre", f"{mq.nombre_fr(s.ects)} ECTS",
+         "60 sur l'année, 30 par semestre", ACCENT, None),
+        ("Heures de cours", f"{mq.nombre_fr(s.heures)} h",
+         f"CM {mq.nombre_fr(s.cm)} · TD {mq.nombre_fr(s.td)} · TP {mq.nombre_fr(s.tp)}",
+         COULEURS["CM"], None),
+        ("Examens terminaux", f"{len(terminaux)} matière"
+         f"{'s' if len(terminaux) > 1 else ''}",
+         f"{len(continu)} en contrôle continu" if continu
+         else "tout se joue le jour J", COULEURS["EXAMEN"], None),
+        ("En entreprise", f"{mq.nombre_fr(entreprise)} ECTS" if entreprise else "—",
+         f"{round(100 * entreprise / s.ects)} % sans aucun cours"
+         if entreprise and s.ects else "tout est en cours", COULEURS["TD"], None),
+    ]
+    for i, (titre, valeur, detail, accent, couleur) in enumerate(tuiles):
+        _tuile(toile, MARGE + i * (largeur_tuile + 12), y, largeur_tuile, 96,
+               titre, valeur, detail, accent, couleur)
+    y += 96 + 22
+
+    # --- Le tableau ---------------------------------------------------------
+    y = _entete_colonnes(toile, y)
+    for i, ue in enumerate(s.ues):
+        couleur = TEINTES_UE[i % len(TEINTES_UE)]
+        y += _bandeau_ue(toile, y, ue, couleur, s.ects) + 4
+        for ec in ue.ecs:
+            y += _ligne_ec(toile, y, ec, couleur)
+        y += 12
+
+    # --- La legende des sigles ----------------------------------------------
+    toile.ligne([MARGE, y, LARGEUR_ECTS - MARGE, y], TRAIT)
+    y += 12
+    x = MARGE
+    for nom, libelle in (("CC", "contrôle continu"), ("ET", "examen terminal"),
+                         ("CC + ET", "les deux"), ("Report", "note reportée")):
+        x += toile.pastille(x, y, nom, _couleur_controle(nom), taille=10.5) + 6
+        toile.texte(x, y + 4, libelle, 11.5, False, TEXTE_FAIBLE)
+        x += toile.largeur_texte(libelle, 11.5) + 18
+    y += 26
+    toile.texte(MARGE, y, "Note seuil de 6/20 dans chaque matière évaluée, "
+                          "12/20 pour l'apprentissage en entreprise. "
+                          "CM cours magistral · TD travaux dirigés · TP travaux pratiques.",
+                11.5, False, TEXTE_FAIBLE, largeur_max=LARGEUR_ECTS - 2 * MARGE)
+    y += 22
+    return toile.finir(chemin or (config.DONNEES / f"ects-s{numero}.png"),
+                       _pied(toile, y + 4, m.source.name if m.source else ""))
+
+
+def rendre_ects_annee(m, chemin=None):
+    """Les deux semestres cote a cote, UE par UE : l'annee en une image.
+
+    Le detail des matieres est volontairement absent — c'est la vue « ou vont
+    mes 60 credits », et y remettre quarante lignes la rendrait identique a la
+    vue d'un semestre, en deux fois plus long.
+    """
+    import maquette as mq
+
+    nb_ue = sum(len(s.ues) for s in m.semestres)
+    toile = Toile(LARGEUR_ECTS, 260 + 74 * len(m.semestres) + 52 * nb_ue + 160)
+    y = _entete(toile, "Maquette de l'année",
+                f"{m.entete} · {mq.nombre_fr(m.ects)} ECTS sur "
+                f"{len(m.semestres)} semestres")
+
+    maxi = max([u.ects for s in m.semestres for u in s.ues] or [1])
+    for s in m.semestres:
+        toile.texte(MARGE, y, s.nom.upper(), 13, True, TEXTE)
+        toile.texte(LARGEUR_ECTS - MARGE, y,
+                    f"{mq.nombre_fr(s.ects)} ECTS · {mq.nombre_fr(s.heures)} h de cours",
+                    13, True, TEXTE_MOYEN, aligne="droite")
+        y += 24
+        toile.ligne([MARGE, y, LARGEUR_ECTS - MARGE, y], TRAIT)
+        y += 10
+
+        x_bar, x_fin = 420, LARGEUR_ECTS - MARGE - 150
+        for i, ue in enumerate(s.ues):
+            couleur = TEINTES_UE[i % len(TEINTES_UE)]
+            toile.rect([MARGE, y + 2, MARGE + 4, y + 34], fond=couleur, rayon=2)
+            toile.texte(MARGE + 16, y + 3, ue.code, 12, True, _eclaircir(couleur, 0.4))
+            toile.texte(MARGE + 58, y + 2, ue.intitule, 14, False, TEXTE,
+                        largeur_max=x_bar - MARGE - 80)
+            toile.texte(MARGE + 58, y + 20, f"{len(ue.ecs)} matière"
+                        f"{'s' if len(ue.ecs) > 1 else ''}"
+                        + (f" · {mq.nombre_fr(ue.heures)} h" if ue.heures
+                           else " · en entreprise"), 11.5, False, TEXTE_FAIBLE)
+            toile.rect([x_bar, y + 8, x_fin, y + 28], fond=CARTE, rayon=5)
+            fin = x_bar + (x_fin - x_bar) * (ue.ects / maxi)
+            toile.rect([x_bar, y + 8, max(fin, x_bar + 5), y + 28], fond=couleur,
+                       rayon=5)
+            toile.texte(LARGEUR_ECTS - MARGE, y + 7, f"{mq.nombre_fr(ue.ects)} ECTS",
+                        14, True, TEXTE, aligne="droite")
+            y += 44
+        y += 20
+
+    return toile.finir(chemin or (config.DONNEES / "ects-annee.png"),
+                       _pied(toile, y, m.source.name if m.source else ""))

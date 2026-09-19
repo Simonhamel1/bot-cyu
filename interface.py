@@ -189,7 +189,7 @@ def _rangee(boutons, fabrique_bouton):
 
 def carte(titre, lignes=(), teinte="info", sous_titre="", image=None,
           boutons=(), menus=(), pied=None, fabrique_bouton=None,
-          fabrique_menu=None):
+          fabrique_menu=None, telechargements=()):
     """La reponse standard du bot.
 
     titre / sous_titre  la tete du bloc ;
@@ -197,6 +197,12 @@ def carte(titre, lignes=(), teinte="info", sous_titre="", image=None,
     teinte              info · cours · devoir · alerte · calme · statut ;
     image               un discord.File deja construit (fichier_image()), ou
                         rien : la carte marche aussi bien en texte seul ;
+    telechargements     des discord.File presentes en PIECES JOINTES, avec leur
+                        nom et leur taille, et un bouton de telechargement.
+                        Une image affichee dans la carte se telecharge deja en
+                        cliquant dessus ; ceci sert a ce que Discord n'affiche
+                        pas — un classeur, un .ics — et a offrir le fichier
+                        source a cote de l'image qui en est tiree ;
     boutons             une liste de Bouton, ou une liste de listes (une par
                         rangee) ;
     menus               une liste de Menu ;
@@ -232,7 +238,15 @@ def carte(titre, lignes=(), teinte="info", sous_titre="", image=None,
         for bloc in _decouper(lignes)[:4]:
             conteneur.add_item(discord.ui.TextDisplay(bloc))
 
-    # Les rangees de boutons : une liste plate = une seule rangee.
+    # Les pieces jointes, sous le texte : Discord les affiche avec leur nom,
+    # leur taille et un bouton « telecharger ».
+    for f in telechargements or ():
+        if f is not None:
+            conteneur.add_item(discord.ui.File(f"attachment://{f.filename}"))
+
+    # Les rangees de boutons : une liste plate = une seule rangee. Cinq au
+    # plus : c'est la limite de Discord par message, et au-dela le panneau
+    # deviendrait de toute facon un mur de boutons.
     rangees = list(boutons) if boutons and isinstance(boutons[0], (list, tuple)) \
         else ([list(boutons)] if boutons else [])
     _dedoublonner(rangees, menus)
@@ -242,7 +256,7 @@ def carte(titre, lignes=(), teinte="info", sous_titre="", image=None,
         rangee = discord.ui.ActionRow()
         rangee.add_item(fabrique_menu(m))
         conteneur.add_item(rangee)
-    for r in rangees[:4]:
+    for r in rangees[:5]:
         if r:
             conteneur.add_item(_rangee(list(r), fabrique_bouton))
 
@@ -322,7 +336,7 @@ def carte_composee(titre, composants, teinte="info", sous_titre="", boutons=(),
         rangee = discord.ui.ActionRow()
         rangee.add_item(fabrique_menu(m))
         conteneur.add_item(rangee)
-    for r in rangees[:4]:
+    for r in rangees[:5]:
         if r:
             conteneur.add_item(_rangee(list(r), fabrique_bouton))
     if pied is not False:

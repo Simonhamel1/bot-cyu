@@ -275,6 +275,18 @@ classe:
   # les predictions qu'il reste a trancher, et le classement.
   recap_predictions: true
 
+  # /ects lit la MAQUETTE de la promo : le classeur M3C (« Modalites de
+  # controle des connaissances et des competences ») publie par l'ecole, avec
+  # les UE, les matieres, les ECTS, les coefficients et le mode d'evaluation.
+  #
+  # Laisse vide : le bot prend le premier fichier « M3C*.xlsx » pose a cote de
+  # bot.py, ou dans donnees/. Une nouvelle version de la maquette ? Tu remplaces
+  # le fichier, /ects suit sans redemarrage.
+  #
+  # Chemin explicite possible (relatif au dossier du bot, ou absolu) :
+  #   maquette: "M3C_ING2_FISA_Maths-Finance_Cergy_2026-2027.xlsx"
+  maquette: ""
+
 
 # ─── Matieres ───────────────────────────────────────────────────────────────
 #

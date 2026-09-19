@@ -193,6 +193,27 @@ mis à jour et retirés tout seuls, toutes les heures, sans jamais toucher aux
 Tout ça se règle dans la section `classe:` de `config.yaml`, et tout est
 facultatif.
 
+### Il sait ce que chaque matière vaut
+
+`/ects` répond avec **la maquette de la promo**, en photo : les unités
+d'enseignement, les matières qu'elles contiennent, ce que chacune vaut en
+**ECTS**, son coefficient, ses heures de CM, TD et TP, sa langue, et la façon
+dont elle sera évaluée — contrôle continu, examen terminal, ou les deux. Une
+barre par UE montre la part qu'elle prend dans les 30 crédits du semestre, et
+quatre chiffres résument le reste : les crédits, les heures, le nombre
+d'examens terminaux, et ce qui se joue en entreprise.
+
+Trois boutons pour changer de vue — **Semestre 1**, **Semestre 2**,
+**L'année** — et un bouton **⬇️ Télécharger** qui te renvoie, en privé,
+l'image en pièce jointe et **le classeur source** à ouvrir dans Excel ou
+LibreOffice.
+
+Ces chiffres ne sont recopiés nulle part dans le code : le bot lit le fichier
+**M3C** de l'école (`M3C_….xlsx`) posé à côté de `bot.py`. L'école publie une
+nouvelle version ? Tu remplaces le fichier, `/ects` suit **sans redémarrage**.
+Sans ce fichier, la commande explique où le mettre, et le bouton disparaît du
+panneau.
+
 ### Il répond aux commandes — et chaque réponse a ses boutons
 
 Chaque réponse est une **carte** : un bloc coloré qui contient le titre, la
@@ -220,6 +241,7 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/meteo [jours]` | le temps qu'il fera, et **s'il faut un parapluie** pour ton trajet |
 | `/comparer [quand]` | **cette semaine contre la précédente** : heures, séances, trous, devoirs à rendre, et ce qui bouge matière par matière |
 | `/examens` | **compte à rebours** avant chaque examen — ceux de CELCAT et ceux de ton carnet réunis — et le temps libre pour réviser d'ici le premier |
+| `/ects [semestre]` | **la maquette de la promo en photo** : chaque UE, chaque matière, ses ECTS, son coefficient, ses heures de CM/TD/TP et **comment elle est évaluée** (contrôle continu ou examen terminal). Un bouton par semestre, une vue de l'année, et **⬇️ Télécharger** qui rend l'image et le classeur source |
 | `/prediction` | **vos prédictions** 🔮 : la liste, chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
 | `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise. **Sa carte part dans `#predictions`**, avec ses boutons de vote |
 | `/sondage` | **un vrai sondage Discord** : `question:`, `reponses:` (`🍕 Pizza ; 🍔 Burger`, vide = Oui / Non), `duree:`, `plusieurs:`. Le résultat est annoncé à la fin |
@@ -230,7 +252,7 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/clear [nombre]` | vider le salon, après confirmation — **les messages épinglés sont gardés** (panneau, tableaux). Droit « gérer les messages » requis |
 | `/statut` | l'assistant tourne-t-il, fraîcheur des données, salons |
 | `/rafraichir` | relire CELCAT tout de suite |
-| `/panneau` | épingle un panneau de **vingt boutons** (journée, semaine, devoirs, stats, sondage, rappel, anniversaires…) et un menu « voir un jour de la semaine » — tout ça sans rien taper |
+| `/panneau` | épingle un panneau de **vingt-et-un boutons** (journée, semaine, devoirs, stats, sondage, rappel, anniversaires…) et un menu « voir un jour de la semaine » — tout ça sans rien taper |
 | `/ics` | le fichier à importer dans ton agenda |
 | `/help` | l'aide, construite depuis ta config |
 
@@ -455,6 +477,14 @@ Depuis ta machine, envoie la config (une seule fois) :
 scp config.yaml utilisateur@ip_du_serveur:~/bot-cyu/config.yaml
 ```
 
+Si tu veux `/ects`, envoie aussi **le classeur M3C** de la promo, de la même
+façon. Le document vient de l'école : à toi de décider s'il a sa place sur un
+dépôt public. Tant qu'il n'y est pas, il ne descend pas avec `git pull`.
+
+```bash
+scp M3C_*.xlsx utilisateur@ip_du_serveur:~/bot-cyu/
+```
+
 Puis, sur le serveur :
 
 ```bash
@@ -534,6 +564,7 @@ systemctl --user stop assistant-cyu
 | `sondages.py` | les sondages Discord : lire les réponses tapées, construire le sondage, retenir ceux du bot, mettre en forme le résultat |
 | `rappels.py` | les rappels : la grammaire de « quand » (`demain 9h`, `dans 2h`, `lundi 14h`…) et leur stockage |
 | `anniversaires.py` | les anniversaires : qui, quand, le prochain, l'âge |
+| `maquette.py` | le classeur M3C de la promo, lu sans dépendance : UE, matières, ECTS, coefficients, mode d'évaluation |
 | `evenements.py` | les examens en événements Discord : ce qui devrait exister, ce qu'il faut créer, modifier, retirer |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |
