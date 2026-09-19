@@ -46,9 +46,10 @@ navigue en cliquant, le message se met a jour sur place, et le salon ne se
 remplit pas.
 
 Ces boutons sont PERSISTANTS : leur identifiant contient l'action et ses
-arguments (« cyu:edt:j:2026-10-12 »), et BoutonCyu sait la rejouer a partir de
-la. Un message d'il y a un mois marche encore apres dix redemarrages, sans
-rien garder en memoire.
+arguments (« cyu:edt:j:2026-10-12 »), et ComposantCyu sait la rejouer a partir
+de la. Un message d'il y a un mois marche encore apres dix redemarrages, sans
+rien garder en memoire. Une seule classe porte les boutons ET les menus, pour
+une raison qui a coute cher a trouver : voir ComposantCyu.
 
 Lancement :
 
@@ -406,63 +407,51 @@ def _decouper_args(texte):
     return [a for a in str(texte or "").split(":") if a != "" and not a.startswith("_")]
 
 
-class BoutonCyu(discord.ui.DynamicItem[discord.ui.Button], template=TEMPLATE):
-    def __init__(self, b: ui.Bouton):
-        super().__init__(discord.ui.Button(
-            label=b.libelle[:80], style=ui.STYLES.get(b.style, ui.STYLES["gris"]),
-            custom_id=b.custom_id, emoji=b.emoji, disabled=b.inactif))
-        self.action, self.args = b.action, [str(a) for a in b.args]
-
-    @classmethod
-    async def from_custom_id(cls, inter, item, match):
-        return cls(ui.Bouton(item.label or "", match["action"],
-                             tuple(_decouper_args(match["args"]))))
-
-    async def callback(self, inter: discord.Interaction):
-        await agir(inter, self.action, self.args)
-
-
-class MenuCyu(discord.ui.DynamicItem[discord.ui.Select], template=TEMPLATE):
-    def __init__(self, m: ui.Menu):
-        super().__init__(ui._menu_simple(m))
-        self.action, self.args = m.action, [str(a) for a in m.args]
-
-    @classmethod
-    async def from_custom_id(cls, inter, item, match):
-        # On garde le menu tel que Discord nous le rend (avec ses options et
-        # les valeurs choisies) : le reconstruire les perdrait.
-        menu = cls.__new__(cls)
-        discord.ui.DynamicItem.__init__(menu, item)
-        menu.action, menu.args = match["action"], _decouper_args(match["args"])
-        return menu
-
-    async def callback(self, inter: discord.Interaction):
-        await agir(inter, self.action, self.args, list(self.item.values))
-
-
 class ComposantCyu(discord.ui.DynamicItem[discord.ui.Item], template=TEMPLATE):
-    """Le rattrapage des messages que le bot ne tient plus en memoire.
+    """Le bouton ET le menu du bot. Une seule classe, et c'est volontaire.
 
-    Tant qu'une carte vient d'etre envoyee, discord.py garde sa vue et sait a
-    quel bouton appartient un clic. Passe un redemarrage, cette vue n'existe
-    plus : le clic est alors confie au REGISTRE des composants dynamiques,
-    alimente par `add_dynamic_items`.
+    discord.py tient un registre des composants persistants, indexe PAR MOTIF :
 
-    Et ce registre est un dictionnaire INDEXE PAR LE MOTIF. BoutonCyu et
-    MenuCyu partagent le meme (« cyu:action:args »), donc y inscrire les deux
-    n'en gardait qu'un — le dernier. Tous les clics sur un bouton d'un vieux
-    message partaient chez MenuCyu, qui lisait `self.item.values` sur un
-    bouton, echouait, et ne repondait jamais : « L'interaction a echoue »,
-    sans une ligne dans la console du bot (discord.py journalise et passe).
+        _dynamic_items[motif] = la classe
 
-    D'ou cette classe unique, la seule inscrite au registre : elle accepte le
-    composant tel que Discord le rend, bouton ou menu, et lit ses valeurs
-    seulement s'il en a. BoutonCyu et MenuCyu continuent de CONSTRUIRE les
-    cartes — elles seules savent poser un style, un emoji ou des options.
+    Deux choses le remplissent, et toutes deux ECRASENT l'entree existante :
+    `add_dynamic_items()` au demarrage, et surtout `add_view()`, appele a
+    CHAQUE envoi de carte, qui y inscrit la classe de chaque composant
+    rencontre. Le projet a longtemps eu deux classes — une pour les boutons,
+    une pour les menus — declarant le meme motif « cyu:action:args ». Le
+    registre n'en gardait donc qu'une, et laquelle dependait de la derniere
+    carte envoyee.
+
+    Le resultat etait deroutant : un clic sur un menu arrivait chez la classe
+    des boutons, qui lisait `item.label` sur un menu, echouait, et discord.py
+    journalisait sans repondre. Discord affichait « le bot n'a pas repondu a
+    temps » — un coup oui, un coup non, selon ce qui avait ete envoye entre
+    deux.
+
+    Une seule classe pour les deux formes supprime le probleme a la racine :
+    quoi qu'on envoie, le registre pointe toujours ici. Elle sait construire
+    un bouton comme un menu, et a la reception elle prend le composant tel que
+    Discord le rend et ne lit ses valeurs que s'il en a.
     """
 
+    def __init__(self, source):
+        """`source` est un ui.Bouton ou un ui.Menu (interface.py)."""
+        if isinstance(source, ui.Menu):
+            composant = ui._menu_simple(source)
+        else:
+            composant = discord.ui.Button(
+                label=source.libelle[:80],
+                style=ui.STYLES.get(source.style, ui.STYLES["gris"]),
+                custom_id=source.custom_id, emoji=source.emoji,
+                disabled=source.inactif)
+        super().__init__(composant)
+        self.action = source.action
+        self.args = [str(a) for a in source.args]
+
     @classmethod
     async def from_custom_id(cls, inter, item, match):
+        # On garde le composant tel que Discord nous le rend : le reconstruire
+        # perdrait les options d'un menu et les valeurs qu'on vient d'y choisir.
         composant = cls.__new__(cls)
         discord.ui.DynamicItem.__init__(composant, item)
         composant.action = match["action"]
@@ -473,6 +462,12 @@ class ComposantCyu(discord.ui.DynamicItem[discord.ui.Item], template=TEMPLATE):
         # `values` n'existe que sur un menu : un bouton n'a rien choisi.
         valeurs = list(getattr(self.item, "values", None) or ())
         await agir(inter, self.action, self.args, valeurs)
+
+
+# Les deux anciens noms, pour que rien n'ait a changer ailleurs. Ils designent
+# la MEME classe : deux classes distinctes se disputeraient le registre.
+BoutonCyu = ComposantCyu
+MenuCyu = ComposantCyu
 
 
 def carte(*args, **kw):
