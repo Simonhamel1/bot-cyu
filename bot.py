@@ -296,7 +296,9 @@ class Assistant(discord.Client):
     async def setup_hook(self):
         # Les boutons et menus sont reconstruits a partir de leur identifiant :
         # c'est ce qui les fait survivre aux redemarrages sans rien stocker.
-        self.add_dynamic_items(BoutonCyu, MenuCyu)
+        # UNE SEULE classe ici : le registre est indexe par motif, et nos deux
+        # fabriques partagent le leur (voir ComposantCyu).
+        self.add_dynamic_items(ComposantCyu)
         if AVEC_DAEMON:
             threading.Thread(target=lancer_daemon, daemon=True,
                              name="daemon-cyu").start()
@@ -388,6 +390,41 @@ class MenuCyu(discord.ui.DynamicItem[discord.ui.Select], template=TEMPLATE):
 
     async def callback(self, inter: discord.Interaction):
         await agir(inter, self.action, self.args, list(self.item.values))
+
+
+class ComposantCyu(discord.ui.DynamicItem[discord.ui.Item], template=TEMPLATE):
+    """Le rattrapage des messages que le bot ne tient plus en memoire.
+
+    Tant qu'une carte vient d'etre envoyee, discord.py garde sa vue et sait a
+    quel bouton appartient un clic. Passe un redemarrage, cette vue n'existe
+    plus : le clic est alors confie au REGISTRE des composants dynamiques,
+    alimente par `add_dynamic_items`.
+
+    Et ce registre est un dictionnaire INDEXE PAR LE MOTIF. BoutonCyu et
+    MenuCyu partagent le meme (« cyu:action:args »), donc y inscrire les deux
+    n'en gardait qu'un — le dernier. Tous les clics sur un bouton d'un vieux
+    message partaient chez MenuCyu, qui lisait `self.item.values` sur un
+    bouton, echouait, et ne repondait jamais : « L'interaction a echoue »,
+    sans une ligne dans la console du bot (discord.py journalise et passe).
+
+    D'ou cette classe unique, la seule inscrite au registre : elle accepte le
+    composant tel que Discord le rend, bouton ou menu, et lit ses valeurs
+    seulement s'il en a. BoutonCyu et MenuCyu continuent de CONSTRUIRE les
+    cartes — elles seules savent poser un style, un emoji ou des options.
+    """
+
+    @classmethod
+    async def from_custom_id(cls, inter, item, match):
+        composant = cls.__new__(cls)
+        discord.ui.DynamicItem.__init__(composant, item)
+        composant.action = match["action"]
+        composant.args = _decouper_args(match["args"])
+        return composant
+
+    async def callback(self, inter: discord.Interaction):
+        # `values` n'existe que sur un menu : un bouton n'a rien choisi.
+        valeurs = list(getattr(self.item, "values", None) or ())
+        await agir(inter, self.action, self.args, valeurs)
 
 
 def carte(*args, **kw):
@@ -1059,7 +1096,10 @@ async def vue_paris_assistant():
                       "semaine calme", 0.15))
 
     # Le jour ou tu vas craquer : le plus lourd de la semaine.
-    s = stats.semaine(cours, cette)
+    # Dans un fil, comme partout ailleurs : ce calcul parcourt tout l'emploi
+    # du temps, et une boucle asyncio bloquee, c'est un bot qui ne repond plus
+    # a personne — y compris aux boutons des autres.
+    s = await asyncio.to_thread(stats.semaine, cours, cette)
     plein = s.jour_plein
     if plein:
         texte = f"**{vue.jour_fr(plein.jour)}** — {vue.duree_fr(plein.minutes)} de cours"

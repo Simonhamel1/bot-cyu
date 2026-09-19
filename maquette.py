@@ -413,11 +413,18 @@ def charger(chemin=None):
 
 
 def disponible():
-    """Y a-t-il une maquette lisible ? Sert a n'afficher le bouton que si oui."""
+    """Y a-t-il un classeur a lire ? Sert a n'afficher le bouton que si oui.
+
+    On regarde si le FICHIER est la, sans l'ouvrir : cette fonction est
+    appelee par vue_panneau(), qui est synchrone et tourne sur la boucle du
+    bot. Y parser une archive ZIP ferait attendre tout le monde pour decider
+    d'afficher un bouton. Si le fichier est present mais illisible, /ects le
+    dira lui-meme, avec le detail.
+    """
+    chemin = fichier()
     try:
-        charger()
-        return True
-    except (MaquetteIntrouvable, OSError):
+        return chemin is not None and chemin.exists()
+    except OSError:
         return False
 
 
