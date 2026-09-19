@@ -106,6 +106,115 @@ _meteo = _section("meteo")
 _classe = _section("classe")
 
 
+# --- Le fuseau horaire, avant tout le reste ----------------------------------
+# Toutes les heures du projet (« briefing_matin: 08:00 », « demain 9h », les
+# horodatages des images) sont lues et ecrites avec datetime.now(), c'est-a-dire
+# a l'heure DU SERVEUR. Or un serveur loue est presque toujours en UTC : « 08:00 »
+# y part alors a 10 h a Paris l'ete, 9 h l'hiver, et personne ne comprend
+# pourquoi le briefing du matin arrive en retard.
+#
+# Plutot que de reprendre deux cents appels a datetime.now(), on regle le fuseau
+# DU PROCESSUS au demarrage : tout le projet parle des lors l'heure de Paris,
+# ou celle que tu mets ici, sans que rien d'autre ne change. Le passage a
+# l'heure d'ete se fait tout seul, c'est la zone qui le sait.
+FUSEAU = str(BRUT.get("fuseau") or "Europe/Paris").strip()
+
+
+def _appliquer_fuseau():
+    """Rend le fuseau effectif pour tout le processus. Sans effet sur Windows,
+    ou tzset n'existe pas : le bot tourne sous systemd, sur Linux."""
+    if not FUSEAU:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(FUSEAU)                   # leve si le nom n'existe pas
+    except Exception as e:                 # noqa: BLE001 - un nom de zone faux
+        print(f"[!] fuseau « {FUSEAU} » inconnu ({e}) : le bot garde celui du "
+              f"serveur. Un nom valide ressemble a « Europe/Paris ».",
+              file=sys.stderr)
+        return ""
+    import os
+    import time as _time
+    os.environ["TZ"] = FUSEAU
+    if hasattr(_time, "tzset"):
+        _time.tzset()
+    return FUSEAU
+
+
+FUSEAU_APPLIQUE = _appliquer_fuseau()
+
+
+def controle_heure():
+    """Le bot est-il a l'heure de `fuseau` ? Rend (ok, lignes d'explication).
+
+    A verifier sur un serveur, pas sur sa machine : une machine de bureau est
+    a l'heure du pays, un serveur loue est en UTC, et rien ne le signale. Le
+    symptome est silencieux et deroutant — le briefing de 8 h arrive a 10 h,
+    et tout le reste avec.
+
+    On compare ce que voit le bot (datetime.now(), c'est-a-dire l'heure du
+    PROCESSUS) avec l'heure qu'il est vraiment dans le fuseau voulu. Un ecart
+    de plus d'une minute ne peut venir que du fuseau.
+    """
+    from datetime import datetime, timezone
+    import time as _time
+
+    zone = FUSEAU or "Europe/Paris"
+    lignes = []
+    try:
+        from zoneinfo import ZoneInfo
+        vraie = datetime.now(ZoneInfo(zone))
+    except Exception as e:                     # noqa: BLE001 - zone inconnue
+        return False, [f"Fuseau « {zone} » illisible : {e}",
+                       "Sur Debian/Ubuntu : sudo apt install tzdata"]
+
+    vue_bot = datetime.now()
+    ecart = round((vue_bot - vraie.replace(tzinfo=None)).total_seconds() / 60)
+    ok = abs(ecart) < 1
+
+    large = max(22, len(zone) + 9)
+    for libelle, valeur in (
+            ("Heure du bot", f"{vue_bot:%d/%m/%Y %H:%M:%S}"),
+            (f"Heure a {zone}", f"{vraie:%d/%m/%Y %H:%M:%S}"),
+            ("Heure UTC", f"{datetime.now(timezone.utc):%d/%m/%Y %H:%M:%S}"),
+            ("Fuseau du systeme", "/".join(dict.fromkeys(_time.tzname))),
+            ("fuseau: du config.yaml", (FUSEAU or "(vide — heure du serveur)")
+             + ("" if FUSEAU_APPLIQUE else "   [NON APPLIQUE]"))):
+        lignes.append(f"{libelle:<{large}} {valeur}")
+
+    if ok:
+        lignes.append("")
+        lignes.append(f"OK — le bot est bien a l'heure de {zone}. Les horaires de "
+                      f"config.yaml (briefings, silence, rappels) sont donc "
+                      f"ceux que tu lis.")
+        return True, lignes
+
+    sens = "en avance" if ecart > 0 else "en retard"
+    lignes.append("")
+    lignes.append(f"PROBLEME — le bot est {abs(ecart)} min {sens} sur {zone}.")
+    # Une heure reglee dans config.yaml est lue a l'heure DU BOT : pour savoir
+    # quand elle tombe vraiment, on retire l'ecart. Le dire en clair vaut mieux
+    # qu'un nombre de minutes, qu'il faut sinon appliquer de tete et a l'envers.
+    from datetime import timedelta
+    exemple = vue_bot.replace(hour=8, minute=0, second=0, microsecond=0) \
+        - timedelta(minutes=ecart)
+    lignes.append(f"Un briefing regle sur 08:00 partirait a {exemple:%H:%M} "
+                  f"heure de {zone}.")
+    if not FUSEAU:
+        lignes.append("Cause : `fuseau:` est vide dans config.yaml, donc le bot "
+                      "suit l'heure du serveur.")
+        lignes.append('Corrige : mets  fuseau: "Europe/Paris"  dans config.yaml, '
+                      'puis redemarre le bot.')
+    elif not FUSEAU_APPLIQUE:
+        lignes.append("Cause : le fuseau n'a pas pu etre applique (voir le message "
+                      "au demarrage).")
+    else:
+        lignes.append("Le fuseau est pourtant applique : l'horloge du serveur "
+                      "elle-meme est fausse.")
+        lignes.append("Corrige :  sudo timedatectl set-ntp true")
+    return False, lignes
+
+
 def _txt(source, cle, defaut=""):
     valeur = source.get(cle, defaut)
     return "" if valeur is None else str(valeur).strip()
@@ -176,6 +285,14 @@ _salons_bruts = _discord.get("salons") or {}
 SALONS = {canal: _txt(_salons_bruts, canal) for canal in CANAUX}
 
 
+# Le nom que le bot porte SUR LE SERVEUR. Le nom global (celui du portail
+# developpeur, « funding bot » tant qu'on ne l'a pas change) ne se change pas
+# depuis le code sans limite : Discord n'en accepte que deux par heure. Le
+# surnom de serveur, lui, est libre, immediat, et c'est celui que tout le monde
+# voit dans les messages et les mentions.
+NOM_BOT = _txt(_discord, "nom", "")
+
+
 def salon_bot(canal):
     """L'identifiant (int) du salon `canal` quand c'est bien un salon poste par
     le bot, sinon None : un webhook ne peut pas porter de boutons."""
@@ -222,6 +339,14 @@ BRIEFING_MATIN = _txt(_notif, "briefing_matin", "07:00")
 # Liste vide (ou absente) = tous les jours, comme avant.
 BRIEFING_MATIN_JOURS = sorted({j % 7 for j in _liste_entiers(_notif, "briefing_matin_jours")})
 BRIEFING_SOIR = _txt(_notif, "briefing_soir", "20:00")
+BRIEFING_SOIR_JOURS = sorted({j % 7 for j in _liste_entiers(_notif, "briefing_soir_jours")})
+# Ne rien envoyer les jours sans cours : un briefing « demain, rien » est du
+# bruit, et c'est ce bruit qui fait couper les notifications du bot.
+BRIEFING_SI_COURS = _bool(_notif, "briefing_si_cours", False)
+# Les jours ou un changement d'emploi du temps a le droit de MENTIONNER. Les
+# autres jours il est quand meme publie, dans #edt, sans notification : on ne
+# perd pas l'information, on perd la sonnerie.
+JOURS_ALERTES = sorted({j % 7 for j in _liste_entiers(_notif, "jours_alertes")})
 RECAP_SEMAINE_JOUR = _entier(_notif, "recap_semaine_jour", 6) % 7
 RECAP_SEMAINE_HEURE = _txt(_notif, "recap_semaine_heure", "18:00")
 
@@ -405,9 +530,14 @@ def resume():
             return "VIDE"
         return valeur[:6] + "..." + valeur[-4:] if len(valeur) > 14 else "rempli"
 
+    from datetime import datetime
+    heure_ok, _ = controle_heure()
     lignes = [
         f"config.yaml : {FICHIER_CONFIG}",
         "",
+        f"  fuseau               {FUSEAU_APPLIQUE or 'heure du serveur'} "
+        f"— il est {datetime.now():%H:%M}"
+        + ("" if heure_ok else "   [!] pas a l'heure : python assistant.py heure"),
         f"  bot_token            {masque(BOT_TOKEN)}",
         f"  webhook_secours      {'rempli' if WEBHOOK_SECOURS else 'VIDE'}",
         f"  cyu.user             {CYU_USER or 'VIDE'}",

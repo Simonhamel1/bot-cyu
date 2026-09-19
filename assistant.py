@@ -242,6 +242,12 @@ def publier_actu(rapport, cours, aujourd=None, demarrage=False):
     # Etre prevenu quand un cours bouge, c'est tout l'interet du bot : par
     # defaut on mentionne a chaque changement, pas seulement pour demain.
     ping = urgent or config.PING_CHANGEMENTS
+    # Sauf les jours qu'on a exclus (le week-end, typiquement) : le changement
+    # est alors publie dans #edt sans mention. On ne supprime jamais
+    # l'information — un cours annule reste annonce, il ne fait que sonner un
+    # jour ou l'autre.
+    if config.JOURS_ALERTES and aujourd.weekday() not in config.JOURS_ALERTES:
+        ping = False
     titre = chg.titre(liste)
     legende = resume_changements(liste)
     if demarrage or rapport.pendant_absence:
@@ -475,6 +481,7 @@ def daemon():
         if not deja_envoye(etat, cle) and \
                 (not config.BRIEFING_MATIN_JOURS or
                  aujourd.weekday() in config.BRIEFING_MATIN_JOURS) and \
+                (jc or not config.BRIEFING_SI_COURS) and \
                 _du(vue.a_heure(aujourd, config.BRIEFING_MATIN, (7, 0)), maintenant):
             corps, urgents = _corps_briefing_matin(cours, liste_devoirs, aujourd,
                                                    maintenant)
@@ -543,7 +550,13 @@ def daemon():
 
         # 7. Briefing du soir : demain, et les echeances qui arrivent.
         cle = f"soir:{aujourd}"
+        # « demain a-t-il des cours ? » decide de l'envoi quand
+        # briefing_si_cours est mis : c'est ce qui fait taire le vendredi et le
+        # samedi soir, sans toucher au dimanche soir, le seul a annoncer lundi.
         if not deja_envoye(etat, cle) and \
+                (not config.BRIEFING_SOIR_JOURS or
+                 aujourd.weekday() in config.BRIEFING_SOIR_JOURS) and \
+                (celcat.du_jour(cours, demain) or not config.BRIEFING_SI_COURS) and \
                 _du(vue.a_heure(aujourd, config.BRIEFING_SOIR, (20, 0)), maintenant):
             corps, urgents = _corps_briefing_soir(cours, liste_devoirs, demain)
             envoyer_photo(
@@ -641,6 +654,7 @@ def construire_parseur():
     sous = p.add_subparsers(dest="commande")
 
     sous.add_parser("config", help="verifier config.yaml sans rien envoyer")
+    sous.add_parser("heure", help="le bot est-il bien a l'heure francaise ?")
 
     sp = sous.add_parser("salons", help="cree les salons Discord dans la categorie")
     sp.add_argument("--categorie", default="",
@@ -770,6 +784,12 @@ def main():
             sys.exit(1)
         print("\nTout est rempli.")
         return
+    if cmd == "heure":
+        # A lancer SUR LE SERVEUR, pas sur sa machine : c'est la-bas que
+        # l'horloge est en UTC sans prevenir personne.
+        ok, lignes = config.controle_heure()
+        print("\n".join(lignes))
+        sys.exit(0 if ok else 1)
     if cmd == "salons":
         creer_salons(args.categorie)
         return

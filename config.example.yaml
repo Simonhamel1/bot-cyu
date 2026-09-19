@@ -31,6 +31,19 @@ discord:
   serveur_id: ""
 
   # Qui est mentionne sur les alertes vraiment urgentes.
+  # Le nom que le bot porte SUR TON SERVEUR. Il le pose lui-meme au demarrage.
+  #
+  # A ne pas confondre avec son nom GLOBAL, celui du portail developpeur : si
+  # tu as cree l'application sous un autre nom (« funding bot »), c'est celui-la
+  # qui s'affiche partout ailleurs, et il se change une seule fois, a la main :
+  #   https://discord.com/developers/applications > ton application
+  #   > Bot > Username  (puis Save)
+  # Le surnom ci-dessous suffit pour ce qu'on lit dans le serveur : messages,
+  # mentions, liste des membres.
+  #
+  # Vide = le bot ne touche a rien. Il lui faut le droit « Changer de pseudo ».
+  nom: "Assistant CYU"
+
   mention: ""
   mentions_actives: true
 
@@ -136,6 +149,17 @@ notifications:
 
   # Le briefing du soir : demain, l'heure de lever, les echeances.
   briefing_soir: "20:00"
+  # Les jours ou il part, comme briefing_matin_jours. Vide = tous les jours.
+  # Attention : le limiter a [0,1,2,3,4] supprime aussi le DIMANCHE SOIR, qui
+  # est le seul a annoncer le lundi. Pour ne plus rien recevoir les jours creux
+  # sans perdre celui-la, prefere briefing_si_cours ci-dessous.
+  briefing_soir_jours: []
+
+  # N'envoyer un briefing que s'il y a des cours a annoncer : le matin si la
+  # journee en a, le soir si DEMAIN en a. Le vendredi et le samedi soir se
+  # taisent donc, le dimanche soir annonce toujours le lundi.
+  # false = les briefings partent meme pour dire qu'il n'y a rien.
+  briefing_si_cours: false
 
   # Le recap de la semaine. jour : 0 = lundi ... 6 = dimanche.
   recap_semaine_jour: 6
@@ -166,6 +190,12 @@ notifications:
 
   # Echeances rappelees dans le briefing du soir, en jours restants.
   devoirs_jours_avant: [7, 3, 1, 0]
+
+  # Les jours ou un cours deplace ou annule a le droit de te MENTIONNER.
+  # 0 = lundi … 6 = dimanche. Vide = tous les jours.
+  # Les autres jours, le changement est quand meme publie — dans #edt, sans
+  # mention : l'information ne se perd pas, elle ne sonne pas.
+  jours_alertes: []
 
   # Frequence de verification de l'emploi du temps, en minutes.
   verif_edt_minutes: 15
@@ -286,6 +316,20 @@ classe:
   # Chemin explicite possible (relatif au dossier du bot, ou absolu) :
   #   maquette: "M3C_ING2_FISA_Maths-Finance_Cergy_2026-2027.xlsx"
   maquette: ""
+
+
+# ─── Fuseau horaire ─────────────────────────────────────────────────────────
+#
+# TOUTES les heures de ce fichier (briefing_matin, silence_de, relance…) sont
+# lues dans ce fuseau, et tout ce que le bot ecrit (« il est 14:05 », un rappel
+# « demain 9h ») aussi.
+#
+# A regler parce qu'un serveur loue est presque toujours en UTC : sans ca,
+# « 08:00 » part a 10 h a Paris l'ete. Le passage a l'heure d'ete est
+# automatique, c'est le fuseau qui le sait.
+#
+# Vide = le bot garde l'heure du serveur.
+fuseau: "Europe/Paris"
 
 
 # ─── Matieres ───────────────────────────────────────────────────────────────

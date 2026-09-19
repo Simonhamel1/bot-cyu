@@ -18,7 +18,7 @@ fichier : **`config.yaml`**. Aucun fichier Python n'a de valeur à modifier.
 | **20 h** | `#annonces` | **la photo de demain**, l'heure de lever conseillée, les échéances |
 | **dimanche 18 h** | `#annonces` | **la photo de la semaine** qui vient, puis **ce qu'elle pèse en chiffres** |
 | **18 h** | `#devoirs` | « tu as eu Corporate finance et VBA, des devoirs à noter ? » |
-| dès qu'un cours bouge | `#alertes` | **la photo du changement**, et **il te tague** |
+| dès qu'un cours bouge | `#alertes` | **la photo du changement**, et **il te tague** — les jours de `jours_alertes` |
 | en permanence | `#edt` · `#statut` | l'image de la semaine et le panneau d'état, réécrits sur place, **sans notification** |
 | **8 h, le jour J** | `#annonces` | 🎂 **joyeux anniversaire** à qui a donné le sien avec `/anniversaire` |
 | à l'heure dite | là où il a été posé | ⏰ chaque **rappel** posé avec `/rappel`, en mentionnant qui il faut |
@@ -29,6 +29,16 @@ fichier : **`config.yaml`**. Aucun fichier Python n'a de valeur à modifier.
 Il n'envoie **pas** de rappel 20 min avant chaque cours : c'était du bruit, les
 deux briefings disent tout. Si tu en veux quand même, remplis
 `notifications.avant_cours_minutes` dans `config.yaml`.
+
+**Se taire les jours creux.** Un briefing « demain, rien » est le genre de
+message qui fait couper les notifications du bot. Trois réglages, dans
+`notifications` :
+
+| Réglage | Effet |
+| --- | --- |
+| `briefing_matin_jours: [0,1,2,3,4]` | le point du matin, du lundi au vendredi seulement |
+| `briefing_si_cours: true` | **aucun briefing quand il n'y a rien à annoncer** : le matin si la journée n'a pas cours, le soir si demain n'en a pas. Le vendredi et le samedi soir se taisent, **le dimanche soir annonce toujours le lundi** |
+| `jours_alertes: [0,1,2,3,4]` | un cours déplacé ne **mentionne** qu'en semaine. Le week-end il est quand même publié dans `#edt`, sans notification : l'information ne se perd pas, elle ne sonne pas |
 
 ### Il détecte vraiment les cours déplacés
 
@@ -258,6 +268,25 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 
 ---
 
+### Son nom sur le serveur
+
+Une application Discord garde le nom sous lequel elle a été créée. Si la tienne
+s'appelle encore `funding bot`, c'est ce nom-là que la promo lit sous chaque
+message. Il y a **deux noms**, et ils ne se changent pas au même endroit :
+
+| Le nom | Où il apparaît | Comment le changer |
+| --- | --- | --- |
+| **Surnom de serveur** | les messages, les mentions, la liste des membres | `discord.nom:` dans `config.yaml` — le bot le pose au démarrage |
+| **Nom global** | partout ailleurs, et dans les autres serveurs | à la main : [portail développeur](https://discord.com/developers/applications) → ton application → **Bot** → *Username* → Save |
+
+Le surnom suffit pour tout ce qu'on voit dans le serveur, il est immédiat et
+réversible. Le nom global, lui, est limité par Discord à deux changements par
+heure, d'où le choix de ne pas y toucher depuis le code. Le bot a besoin du
+droit **« Changer de pseudo »** ; sans lui, il le dit dans la console et garde
+son nom.
+
+---
+
 ## Les huit salons
 
 Un salon par type de message, pour régler les notifications Discord séparément.
@@ -401,6 +430,7 @@ Puis, dans `#commandes` : `/panneau` pour épingler les boutons.
 
 ```bash
 python assistant.py config                    # vérifier config.yaml
+python assistant.py heure                     # le bot est-il à l'heure française ?
 python assistant.py aujourdhui                # la journée
 python assistant.py demain
 python assistant.py semaine                   # la grille + le détail
@@ -522,15 +552,36 @@ jour le code sans écraser le cache ni le carnet de devoirs.
 ### Le fuseau horaire du serveur
 
 Les horaires de `config.yaml` (`briefing_matin: "08:00"`, `silence_de`, …) sont
-lus en **heure locale du serveur**, sans conversion. Un VPS livré en UTC
-enverrait donc le briefing de 8 h à 10 h heure de Paris. À régler une fois :
+lus dans le fuseau donné en tête du fichier :
+
+```yaml
+fuseau: "Europe/Paris"
+```
+
+**Le bot s'y tient même si le serveur est en UTC**, ce qui est le cas de presque
+tous les VPS. Sans ce réglage, un briefing de 8 h partirait à 10 h heure de
+Paris, sans le moindre message d'erreur : c'est une panne silencieuse, qui
+décale aussi les heures de silence, les rappels et les horodatages des images.
+Le passage à l'heure d'été est automatique.
+
+Pour le vérifier **sur le serveur**, pas sur ta machine :
+
+```bash
+python assistant.py heure
+```
+
+Il affiche l'heure du bot, celle de Paris, celle du serveur, et dit laquelle
+cloche avec la marche à suivre. Il sort en code 1 si ça ne va pas, donc il
+s'utilise aussi dans un script de déploiement. Le bot fait le même contrôle à
+chaque démarrage : il l'écrit dans la console, prévient dans `#logs` si ça
+cloche, et `/statut` en porte une ligne.
+
+Régler l'horloge du serveur lui-même reste une bonne idée, mais n'est plus
+indispensable :
 
 ```bash
 sudo timedatectl set-timezone Europe/Paris
-systemctl --user restart assistant-cyu
 ```
-
-`installer.sh` le vérifie et te prévient si ce n'est pas fait.
 
 ### Piloter le service
 

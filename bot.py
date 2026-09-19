@@ -292,6 +292,7 @@ class Assistant(discord.Client):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         self._commandes_publiees = False
+        self._heure_signalee = False
 
     async def setup_hook(self):
         # Les boutons et menus sont reconstruits a partir de leur identifiant :
@@ -310,9 +311,56 @@ class Assistant(discord.Client):
 
     async def on_ready(self):
         print(f"[i] connecté comme {self.user}", flush=True)
+        await self._controler_heure()
+        await self._poser_son_nom()
         if not self._commandes_publiees:
             await self._publier_commandes()
             self._commandes_publiees = True
+
+    async def _poser_son_nom(self):
+        """Le surnom du bot sur le serveur, depuis config.yaml.
+
+        Une application Discord garde le nom sous lequel on l'a creee — souvent
+        celui d'un projet precedent. Ce nom-la se change dans le portail
+        developpeur, et Discord n'en accepte que deux par heure ; le SURNOM de
+        serveur, lui, est libre et immediat, et c'est celui que la promo lit
+        dans chaque message.
+        """
+        voulu = config.NOM_BOT.strip()[:32]
+        if not voulu:
+            return
+        for serveur in self.guilds:
+            moi = serveur.me
+            if moi is None or moi.nick == voulu:
+                continue
+            try:
+                await moi.edit(nick=voulu)
+                print(f"[i] surnom « {voulu} » posé sur {serveur.name}", flush=True)
+            except discord.Forbidden:
+                print(f"[!] pas le droit « Changer de pseudo » sur {serveur.name} : "
+                      f"le bot reste « {moi.display_name} ».", flush=True)
+            except discord.HTTPException as e:
+                print(f"[!] surnom refusé sur {serveur.name} : {e}", flush=True)
+
+    async def _controler_heure(self):
+        """Une horloge fausse ne se voit nulle part : elle deplace juste toutes
+        les heures du bot, sans erreur ni trace. On la verifie au demarrage, la
+        seule fois ou quelqu'un regarde la console."""
+        ok, lignes = config.controle_heure()
+        from datetime import datetime
+        if ok:
+            print(f"[i] heure : {datetime.now():%d/%m %H:%M} "
+                  f"({config.FUSEAU_APPLIQUE or 'heure du serveur'})", flush=True)
+            return
+        print("[!] " + "\n    ".join(lignes), flush=True)
+        if self._heure_signalee:
+            return
+        self._heure_signalee = True
+        await asyncio.to_thread(
+            notif.envoyer, "Le bot n'est pas à l'heure",
+            ["Tous les horaires de `config.yaml` sont donc décalés : briefings, "
+             "heures de silence, rappels.", "```" + "\n".join(lignes) + "```"],
+            "devoir", False, "logs")
 
     async def _publier_commandes(self):
         """Publier les commandes sur UN serveur est instantane ; en global,
@@ -1925,6 +1973,16 @@ async def vue_statut():
         lignes = [f"⚠️ le panneau d'état a échoué : `{type(e).__name__}: {e}`"[:300]]
     lignes += ["", "**Le daemon** — " + ("🟢 actif" if vivant else "🔴 ARRÊTÉ")
                + ("" if AVEC_DAEMON else " (AVEC_DAEMON = False dans bot.py)")]
+
+    # L'heure : une horloge fausse decale tout sans rien casser, donc sans
+    # jamais se signaler. C'est la ligne a lire avant d'accuser le daemon.
+    heure_ok, heure_lignes = config.controle_heure()
+    if heure_ok:
+        lignes.append(f"**L'heure** — 🟢 {datetime.now():%H:%M} · "
+                      f"{config.FUSEAU_APPLIQUE or 'heure du serveur'}")
+    else:
+        lignes.append("**L'heure** — 🔴 " + heure_lignes[-3]
+                      + f"\n-# {heure_lignes[-1]}")
     try:
         n_r, n_s, n_e, n_a = await asyncio.to_thread(
             lambda: (len(rp.lire()), len(sd.lire()), len(ev.lire()), len(an.lire())))
