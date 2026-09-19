@@ -1309,8 +1309,19 @@ async def vue_predictions_closes():
                       + (f" · avaient raison : {justes}" if justes else ""))
     if len(closes) > 12:
         lignes.append(f"-# … et {len(closes) - 12} autres")
+
+    # De quoi effacer une prediction tranchee : sans ce menu, elle restait dans
+    # la liste et dans le classement pour toujours, y compris quand elle avait
+    # ete posee ou tranchee par erreur. « closes » ramene ici apres le clic,
+    # plutot que sur la liste des paris en cours.
+    menus = [ui.Menu("predsel", "Supprimer une prédiction tranchée (l'auteur seulement)…",
+                     [(f"🗑 #{p['id']} — {p['texte']}"[:100], f"suppr:{p['id']}",
+                       f"{'✅ réalisée' if p['resultat'] == 'oui' else '❌ ratée'}"
+                       f" · par {p['auteur']}"[:100], None)
+                      for p in closes[:25]], args=("closes",))]
     return carte("Prédictions tranchées", lignes, "info",
-                 sous_titre=f"{len(closes)} au total", boutons=boutons), []
+                 sous_titre=f"{len(closes)} au total", boutons=boutons,
+                 menus=menus), []
 
 
 async def vue_classement():
@@ -1455,6 +1466,11 @@ async def _apres_tranchage(p, etat, inter):
         return
     realisee = p.get("resultat") == "oui"
     justes = pr.noms(p, p.get("resultat"), 8)
+    # Le pari est DEJA tranche a ce stade : tout ce qui suit n'est que
+    # l'annonce. Si le salon #predictions a disparu, si le bot n'y a plus
+    # acces, ou si Discord refuse, on le note dans la console et on s'arrete
+    # la — laisser l'exception remonter afficherait « Ça n'a pas marché » a
+    # quelqu'un dont le pari vient pourtant d'etre tranche.
     try:
         salon = await _salon(salon_id)
         await salon.send(view=carte(
@@ -1466,8 +1482,9 @@ async def _apres_tranchage(p, etat, inter):
             boutons=[_b("Classement", "pred", "classement", emoji="🏆"),
                      _b("Parier", "pred", "ajout", style="vert", emoji="🎲")],
             pied=False))
-    except discord.HTTPException as e:
-        print(f"[!] annonce dans #predictions impossible : {e}", flush=True)
+    except Exception as e:                      # noqa: BLE001 - filet volontaire
+        print(f"[!] annonce dans #predictions impossible : "
+              f"{type(e).__name__}: {e}", flush=True)
 
 
 def vue_recap_predictions(liste):
@@ -2474,6 +2491,14 @@ async def _vue_navigation(action, args, valeurs, inter=None):
                     # Apres un defer, un followup n'accepte que du texte.
                     await inter.followup.send(
                         f"#{ident} n'est pas à toi : seul l'auteur supprime.", ephemeral=True)
+                elif etat == "ok" and inter is not None:
+                    await inter.followup.send(
+                        f"🗑️ Prédiction #{ident} supprimée.", ephemeral=True)
+        # Revenir sur la vue d'ou vient le menu : effacer une prediction
+        # tranchee depuis la liste des tranchees ne doit pas renvoyer sur
+        # celle des paris en cours.
+        if args[:1] == ["closes"]:
+            return await vue_predictions_closes()
         return await vue_predictions(0)
     if action == "evenements":
         if inter is not None and inter.guild is not None and config.EVENEMENTS_EXAMENS:
