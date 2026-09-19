@@ -15,6 +15,21 @@
 # ════════════════════════════════════════════════════════════════════════════
 
 
+# ─── Fuseau horaire ─────────────────────────────────────────────────────────
+#
+# TOUTES les heures de ce fichier (briefing_matin, silence_de, relance…) sont
+# lues dans ce fuseau, et tout ce que le bot ecrit (« il est 14:05 », un rappel
+# « demain 9h ») aussi.
+#
+# A regler parce qu'un serveur loue est presque toujours en UTC : sans ca,
+# « 08:00 » part a 10 h a Paris l'ete. Le passage a l'heure d'ete est
+# automatique, c'est le fuseau qui le sait.
+#
+# Vide = le bot garde l'heure du serveur.
+# A verifier sur le serveur :  python assistant.py heure
+fuseau: "Europe/Paris"
+
+
 # ─── Discord ────────────────────────────────────────────────────────────────
 discord:
 
@@ -316,20 +331,6 @@ classe:
   # Chemin explicite possible (relatif au dossier du bot, ou absolu) :
   #   maquette: "M3C_ING2_FISA_Maths-Finance_Cergy_2026-2027.xlsx"
   maquette: ""
-
-
-# ─── Fuseau horaire ─────────────────────────────────────────────────────────
-#
-# TOUTES les heures de ce fichier (briefing_matin, silence_de, relance…) sont
-# lues dans ce fuseau, et tout ce que le bot ecrit (« il est 14:05 », un rappel
-# « demain 9h ») aussi.
-#
-# A regler parce qu'un serveur loue est presque toujours en UTC : sans ca,
-# « 08:00 » part a 10 h a Paris l'ete. Le passage a l'heure d'ete est
-# automatique, c'est le fuseau qui le sait.
-#
-# Vide = le bot garde l'heure du serveur.
-fuseau: "Europe/Paris"
 
 
 # ─── Matieres ───────────────────────────────────────────────────────────────
