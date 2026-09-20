@@ -1877,3 +1877,324 @@ def rendre_ects_annee(m, chemin=None):
 
     return toile.finir(chemin or (config.DONNEES / "ects-annee.png"),
                        _pied(toile, y, m.source.name if m.source else ""))
+
+
+# --- Le calendrier d'alternance ----------------------------------------------
+# Le PDF de l'ecole a ses propres couleurs (bleu nuit, orange, vert, vert
+# pale). On ne les reprend PAS telles quelles : le rouge veut dire « examen »
+# partout ailleurs dans le bot, et un examen vert ici obligerait a apprendre
+# deux grammaires de couleurs pour le meme logiciel. On garde donc celles du
+# projet, et la legende est dessinee sous chaque vue pour lever le doute.
+LARGEUR_ALT = 900
+LARGEUR_ALT_ANNEE = 940
+
+COULEURS_ALTERNANCE = {
+    "entreprise": COULEURS["CM"],
+    "formation": ORANGE,
+    "examen": COULEURS["EXAMEN"],
+    "rattrapage": COULEURS["PROJET"],
+    "ferie": VERT,
+    "weekend": CARTE,
+    "hors": (23, 24, 28),
+}
+
+
+def _couleur_alt(nature):
+    return COULEURS_ALTERNANCE.get(nature, CARTE)
+
+
+def _legende_alt(toile, y, cal, debut=None, fin=None):
+    """Les pastilles sous la grille, et seulement celles qu'on y voit."""
+    import alternance as alt
+
+    presentes = cal.natures_presentes(debut, fin)
+    if not presentes:
+        return y
+    x = MARGE
+    for nature in presentes:
+        libelle = alt.NOMS.get(nature, nature)
+        if x + toile.largeur_texte(libelle, 11, True) + 30 > toile.largeur - MARGE:
+            x, y = MARGE, y + 26
+        x += toile.pastille(x, y, libelle, _couleur_alt(nature)) + 7
+    return y + 30
+
+
+def _case_jour(toile, x, y, larg, haut, jour, cal, aujourd_hui, dans_fenetre=True):
+    """Une case de jour : un fond qui dit sa nature, son quantieme dessus.
+
+    Hors de la fenetre demandee, la case est estompee plutot qu'effacee : on
+    voit qu'un mois continue avant et apres ce qu'on a demande, sans que ca
+    vienne concurrencer ce qu'on regarde."""
+    nature = cal.nature(jour)
+    fond = _couleur_alt(nature)
+    if not dans_fenetre:
+        fond = _melanger(FOND, fond, 0.28)
+    toile.rect([x, y, x + larg, y + haut], fond=fond, rayon=7)
+
+    if nature in ("weekend", "hors"):
+        couleur = TEXTE_FAIBLE if dans_fenetre else _melanger(FOND, TEXTE_FAIBLE, 0.5)
+    else:
+        couleur = _texte_sur(fond) if dans_fenetre else _melanger(FOND, TEXTE, 0.55)
+
+    # Aujourd'hui porte un anneau clair : c'est ce qu'on cherche des yeux en
+    # premier en ouvrant l'image.
+    if jour == aujourd_hui:
+        toile.rect([x, y, x + larg, y + haut], rayon=7, contour=TEXTE, epaisseur=2)
+    toile.texte(x + larg / 2, y + haut / 2 - 9, str(jour.day), 14,
+                jour == aujourd_hui, couleur, aligne="centre")
+
+
+def _grille_mois(toile, y, cal, an, mois, debut, fin, aujourd_hui):
+    """Un mois en grille : les semaines en lignes, lundi a gauche.
+
+    Le numero de semaine est garde dans la colonne de gauche : le calendrier
+    de l'ecole en parle (« S 36 »), les profs aussi, et sans lui l'image ne
+    permet pas de repondre a « c'est quelle semaine ? »."""
+    import alternance as alt
+    import calendar as _cal
+
+    colonne_s = 44
+    larg = (toile.largeur - 2 * MARGE - colonne_s - 6 * 6) / 7
+    haut = 46
+
+    toile.texte(MARGE, y, f"{alt.MOIS_FR[mois - 1].capitalize()} {an}", 17, True, TEXTE)
+    y += 26
+    x0 = MARGE + colonne_s
+    for i, nom in enumerate(("L", "M", "M", "J", "V", "S", "D")):
+        toile.texte(x0 + i * (larg + 6) + larg / 2, y, nom, 11, True,
+                    TEXTE_FAIBLE if i < 5 else _melanger(FOND, TEXTE_FAIBLE, 0.6),
+                    aligne="centre")
+    y += 20
+
+    premier = date(an, mois, 1)
+    dernier = date(an, mois, _cal.monthrange(an, mois)[1])
+    # On part du lundi de la semaine du 1er : une grille de mois commence
+    # toujours par une semaine entiere, quitte a deborder sur le mois d'avant.
+    jour = premier - timedelta(days=premier.weekday())
+    while jour <= dernier:
+        toile.texte(MARGE + colonne_s - 12, y + haut / 2 - 8,
+                    f"S{jour.isocalendar()[1]}", 10.5, False, TEXTE_FAIBLE,
+                    aligne="droite")
+        for i in range(7):
+            d = jour + timedelta(days=i)
+            if d.month != mois:
+                continue                # pas de debordement : la case reste vide
+            _case_jour(toile, x0 + i * (larg + 6), y, larg, haut, d, cal,
+                       aujourd_hui, debut <= d <= fin)
+        y += haut + 6
+        jour += timedelta(days=7)
+    return y + 10
+
+
+def _bandeau_alt(toile, y, lignes):
+    """Le resume en haut de l'image : ou on en est, et ce qui vient ensuite."""
+    if not lignes:
+        return y
+    hauteur = 20 + 24 * len(lignes)
+    toile.rect([MARGE, y, toile.largeur - MARGE, y + hauteur], fond=CARTE, rayon=RAYON)
+    for i, ligne in enumerate(lignes):
+        toile.texte(MARGE + 16, y + 12 + 24 * i, ligne, 14, i == 0,
+                    TEXTE if i == 0 else TEXTE_MOYEN,
+                    largeur_max=toile.largeur - 2 * MARGE - 32)
+    return y + hauteur + 16
+
+
+def _lignes_periodes(toile, y, cal, debut, fin, aujourd_hui, maxi=12):
+    """Le detail : une ligne par periode, avec ses dates et ce qu'elle pese.
+
+    C'est la partie que les gens relisent -- « les examens, c'est quand,
+    exactement ? » -- donc elle est ecrite, pas seulement coloriee."""
+    import alternance as alt
+
+    periodes = [p for p in cal.entre(debut, fin)
+                if p.nature not in ("weekend", "hors")][:maxi]
+    if not periodes:
+        return y
+    toile.texte(MARGE, y, "LE DÉTAIL", 12, True, TEXTE_FAIBLE)
+    y += 22
+    for p in periodes:
+        couleur = _couleur_alt(p.nature)
+        en_cours = p.contient(aujourd_hui)
+        if en_cours:
+            toile.rect([MARGE - 6, y - 4, toile.largeur - MARGE + 6, y + 36],
+                       fond=CARTE, rayon=8)
+        toile.rect([MARGE, y + 2, MARGE + 4, y + 30], fond=couleur, rayon=2)
+        toile.texte(MARGE + 16, y, alt.NOMS.get(p.nature, p.nature), 14, True,
+                    _eclaircir(couleur, 0.45))
+        toile.texte(MARGE + 16, y + 18, alt.intervalle_fr(p.debut, p.fin), 12.5,
+                    False, TEXTE_MOYEN, largeur_max=toile.largeur - 2 * MARGE - 220)
+
+        detail = alt.compte_fr(p.ouvres, "jour")
+        if p.nature in ("formation", "entreprise") and p.semaines > 1:
+            detail = f"{alt.compte_fr(p.semaines, 'semaine')} · {detail}"
+        toile.texte(toile.largeur - MARGE, y + 1, detail, 13, True, TEXTE,
+                    aligne="droite")
+        if en_cours:
+            note = "en cours"
+        elif p.debut > aujourd_hui:
+            note = alt.duree_fr((p.debut - aujourd_hui).days)
+        else:
+            note = "passée"
+        toile.texte(toile.largeur - MARGE, y + 19, note, 11.5, False,
+                    TEXTE_MOYEN if en_cours else TEXTE_FAIBLE, aligne="droite")
+        y += 42
+    return y + 6
+
+
+def rendre_alternance(cal, debut, fin, chemin=None, titre=None, sous_titre="",
+                      aujourd_hui=None):
+    """Le calendrier d'alternance sur une fenetre : les mois en grilles.
+
+    Au-dela de quatre mois l'image deviendrait un mur de petits carres qu'il
+    faut zoomer : c'est rendre_alternance_annee() qui prend le relais, avec
+    une forme faite pour ca.
+    """
+    import alternance as alt
+
+    aujourd_hui = aujourd_hui or date.today()
+    mois = []
+    curseur = date(debut.year, debut.month, 1)
+    while curseur <= fin:
+        mois.append((curseur.year, curseur.month))
+        curseur = date(curseur.year + (curseur.month == 12),
+                       curseur.month % 12 + 1, 1)
+    mois = mois[:4]
+
+    resume = alt.bloc_resume(cal, aujourd_hui)
+    resume = [_sans_fioritures(l) for l in resume]
+    nb_periodes = len([p for p in cal.entre(debut, fin)
+                       if p.nature not in ("weekend", "hors")][:12])
+    toile = Toile(LARGEUR_ALT,
+                  220 + 24 * len(resume) + 360 * len(mois) + 42 * nb_periodes + 200)
+
+    y = _entete(toile, titre or "Calendrier d'alternance",
+                sous_titre or f"{cal.annee} · {alt.intervalle_fr(debut, fin)}")
+    y = _bandeau_alt(toile, y, resume)
+    for an, m in mois:
+        y = _grille_mois(toile, y, cal, an, m, debut, fin, aujourd_hui)
+    y = _legende_alt(toile, y, cal, debut, fin)
+    y = _lignes_periodes(toile, y, cal, debut, fin, aujourd_hui)
+
+    return toile.finir(chemin or (config.DONNEES / "alternance.png"),
+                       _pied(toile, y, cal.source.name if cal.source else ""))
+
+
+def _sans_fioritures(texte):
+    """Une ligne ecrite pour Discord, ramenee a ce qu'une image sait montrer.
+
+    Le Markdown n'a aucun sens ici, et les emoji encore moins : DejaVu leur
+    oppose un rectangle vide, et _nettoyer() ne les voit pas passer parce que
+    ce rectangle EST un glyphe valide pour la police. On les retire donc a la
+    source, par leurs plages Unicode."""
+    texte = str(texte).replace("**", "")
+    garde = []
+    for c in texte:
+        p = ord(c)
+        if (0x1F000 <= p <= 0x1FAFF or 0x2600 <= p <= 0x27BF
+                or 0x2B00 <= p <= 0x2BFF or p in (0xFE0F, 0x20E3, 0x2B1C)):
+            continue
+        garde.append(c)
+    return "".join(garde).strip()
+
+
+def rendre_alternance_annee(cal, chemin=None, aujourd_hui=None, debut=None,
+                            fin=None):
+    """L'annee entiere : une ligne par mois, un carre par jour.
+
+    C'est la forme du PDF de l'ecole, retournee. Le document officiel met les
+    mois en COLONNES et les jours en lignes, ce qui donne un tableau plus haut
+    que large : sur un telephone, il faut zoomer et faire defiler pour suivre
+    un mois. Une ligne par mois tient dans la largeur d'un ecran, et l'oeil
+    suit une periode de gauche a droite sans rien faire.
+    """
+    import alternance as alt
+
+    aujourd_hui = aujourd_hui or date.today()
+    debut = debut or cal.debut
+    fin = fin or cal.fin
+    if debut is None:
+        raise ValueError("calendrier vide")
+
+    mois = []
+    curseur = date(debut.year, debut.month, 1)
+    while curseur <= fin:
+        mois.append((curseur.year, curseur.month))
+        curseur = date(curseur.year + (curseur.month == 12),
+                       curseur.month % 12 + 1, 1)
+
+    colonne = 78
+    case = (LARGEUR_ALT_ANNEE - 2 * MARGE - colonne - 30) / 31
+    haut = 26
+    resume = [_sans_fioritures(l) for l in alt.bloc_resume(cal, aujourd_hui)]
+    nb_periodes = len([p for p in cal.periodes
+                       if p.nature not in ("weekend", "hors")][:12])
+    toile = Toile(LARGEUR_ALT_ANNEE,
+                  360 + 24 * len(resume) + 32 * len(mois) + 42 * nb_periodes + 280)
+
+    y = _entete(toile, "Calendrier d'alternance",
+                f"{cal.annee} · l'année entière · "
+                f"{alt.intervalle_fr(cal.debut, cal.fin, court=True)}")
+    y = _bandeau_alt(toile, y, resume)
+
+    # La regle des quantiemes, en haut : sans elle, compter les carres pour
+    # retrouver le 17 est le seul moyen de lire l'image.
+    for j in range(1, 32):
+        if j == 1 or j % 5 == 0:
+            toile.texte(MARGE + colonne + (j - 0.5) * case, y, str(j), 10, False,
+                        TEXTE_FAIBLE, aligne="centre")
+    y += 16
+
+    import calendar as _cal
+    for an, m in mois:
+        toile.texte(MARGE, y + haut / 2 - 8,
+                    f"{alt.MOIS_COURTS[m - 1]} {str(an)[2:]}", 12, True, TEXTE_MOYEN)
+        for j in range(1, _cal.monthrange(an, m)[1] + 1):
+            d = date(an, m, j)
+            x = MARGE + colonne + (j - 1) * case
+            nature = cal.nature(d)
+            fond = _couleur_alt(nature)
+            toile.rect([x + 1, y, x + case - 1, y + haut - 4], fond=fond, rayon=4)
+            if d == aujourd_hui:
+                toile.rect([x + 1, y, x + case - 1, y + haut - 4], rayon=4,
+                           contour=TEXTE, epaisseur=2)
+            # Les week-ends portent un point : sur un carre de 26 pixels, le
+            # quantieme ne tient pas, mais l'oeil a besoin d'un repere pour
+            # retrouver les semaines.
+            if nature == "weekend":
+                toile.disque(x + case / 2, y + (haut - 4) / 2, 1.5, TEXTE_FAIBLE)
+        y += haut + 6
+
+    y += 8
+    y = _legende_alt(toile, y, cal)
+    y = _totaux_alt(toile, y, cal)
+    # Sur l'annee entiere, lister les periodes DEPUIS LE DEBUT remplirait la
+    # moitie de l'image avec ce qui est deja passe. On part d'aujourd'hui :
+    # la periode en cours reste en tete, et le reste est ce qui arrive.
+    depart = aujourd_hui if cal.couvre(aujourd_hui) else cal.debut
+    y = _lignes_periodes(toile, y, cal, depart, cal.fin, aujourd_hui, maxi=10)
+
+    return toile.finir(chemin or (config.DONNEES / "alternance-annee.png"),
+                       _pied(toile, y, cal.source.name if cal.source else ""))
+
+
+def _totaux_alt(toile, y, cal):
+    """Ce que pese l'annee : une tuile par nature, en jours ouvres.
+
+    C'est la reponse a « combien de temps je passe ou ? », qu'aucune grille
+    de carres colories ne donne d'un coup d'oeil."""
+    import alternance as alt
+
+    comptes = cal.comptes()
+    natures = [n for n in ("formation", "entreprise", "examen", "rattrapage")
+               if comptes.get(n)]
+    if not natures:
+        return y
+    total = sum(comptes.get(n, 0) for n in natures) or 1
+    largeur = (toile.largeur - 2 * MARGE - 12 * (len(natures) - 1)) / len(natures)
+    for i, nature in enumerate(natures):
+        jours = comptes[nature]
+        _tuile(toile, MARGE + i * (largeur + 12), y, largeur, 92,
+               alt.NOMS.get(nature, nature), alt.compte_fr(jours, "jour"),
+               f"{round(100 * jours / total)} % de l'année",
+               accent=_couleur_alt(nature))
+    return y + 92 + 18

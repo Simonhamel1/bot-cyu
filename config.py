@@ -423,6 +423,13 @@ RECAP_PREDICTIONS = _bool(_classe, "recap_predictions", True)
 # Le classeur M3C de la promo, pour /ects. Vide = le premier « M3C*.xlsx »
 # trouve a cote du bot : deposer le fichier suffit, sans rien regler ici.
 MAQUETTE_FICHIER = _txt(_classe, "maquette", "")
+# Le calendrier d'alternance de la promo, pour /calendrier. Vide = le premier
+# PDF « calendrier*.pdf » ou « *alternance*.pdf » trouve a cote du bot.
+CALENDRIER_FICHIER = _txt(_classe, "calendrier", "")
+# L'annee ou DEMARRE ce calendrier (2026 pour un calendrier 2026-2027). Vide,
+# ou 0 : le bot la deduit du PDF, ce qui marche dans tous les cas connus. A ne
+# remplir que si /calendrier dit ne pas pouvoir la deviner.
+CALENDRIER_ANNEE = _entier(_classe, "calendrier_annee", 0)
 
 
 # --- Matieres ----------------------------------------------------------------

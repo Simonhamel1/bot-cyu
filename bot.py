@@ -25,6 +25,9 @@ C'est le fichier a lancer au quotidien. Un seul processus fait les deux choses :
     /meteo [jours]      le temps, et s'il faut un parapluie pour ton trajet
     /libre              tes creneaux libres
     /ects [semestre]    la maquette : UE, matieres, ECTS, coefficients
+    /calendrier [quand] le calendrier d'alternance EN PHOTO : entreprise,
+                        cours, examens, rattrapages — un mois, « +21 »,
+                        « 3 mois », ou l'annee entiere
     /statut             l'assistant tourne-t-il, fraicheur des donnees
     /rafraichir         relire CELCAT tout de suite
     /panneau            epingle le panneau de boutons dans un salon
@@ -80,6 +83,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 import actu
+import alternance as alt
 import anniversaires as an
 import assistant
 import celcat
@@ -1107,6 +1111,355 @@ async def vue_ects_telechargement(quoi=""):
     return vue_, fichiers
 
 
+
+# --- Le calendrier d'alternance ----------------------------------------------
+# Ce que /calendrier accepte dans « quand ». Un seul champ, trois facons de
+# s'en servir : un MOIS (« novembre », « janvier 27 »), une DUREE a partir
+# d'aujourd'hui (« +21 », « 3 mois »), ou l'ANNEE entiere. Le menu deroulant
+# de la carte propose les mois ; le champ, lui, reste libre.
+RE_ALT_JOURS = re.compile(r"^\+?(\d{1,3})\s*(?:j|jour|jours)?$")
+RE_ALT_SEMAINES = re.compile(r"^\+?(\d{1,2})\s*semaines?$")
+RE_ALT_MOIS_DUREE = re.compile(r"^\+?(\d{1,2})\s*mois$")
+RE_ALT_MOIS_NUM = re.compile(r"^(\d{1,2})[/-](\d{2,4})$")
+RE_ALT_MOIS_NOM = re.compile(r"^([a-z]+)\.?\s*(\d{2,4})?$")
+
+def _cle_mois(annee, mois):
+    """« 2026-11 » : ce qu'un bouton ou une option de menu transporte."""
+    return f"{annee:04d}-{mois:02d}"
+
+
+def _quand_du_mois(cle):
+    """« 2026-11 » -> « 11/2026 », la forme que sait lire fenetre_alternance().
+
+    Les deux ne sont pas dans le meme ordre a dessein : l'identifiant se trie,
+    la saisie se lit comme une date francaise."""
+    annee, _, mois = str(cle or "").partition("-")
+    return f"{mois}/{annee}" if mois else ""
+
+
+def _mois_numero(nom):
+    """« nov », « novembre », « aout » -> le numero du mois, ou None."""
+    nom = celcat.normaliser(nom).rstrip(".")
+    if not nom:
+        return None
+    for i, complet in enumerate(alt.MOIS_FR, start=1):
+        court = celcat.normaliser(alt.MOIS_COURTS[i - 1]).rstrip(".")
+        complet = celcat.normaliser(complet)
+        if nom == complet or nom == court or (len(nom) >= 3 and complet.startswith(nom)):
+            return i
+    return None
+
+
+def _mois_du_calendrier(cal):
+    """[(annee, mois)] : les mois que le PDF couvre, dans l'ordre."""
+    sortie = []
+    if cal.debut is None:
+        return sortie
+    curseur = date(cal.debut.year, cal.debut.month, 1)
+    while curseur <= cal.fin:
+        sortie.append((curseur.year, curseur.month))
+        curseur = date(curseur.year + (curseur.month == 12),
+                       curseur.month % 12 + 1, 1)
+    return sortie
+
+
+def _choisir_annee(cal, mois, annee=None):
+    """Quelle annee pour « novembre » ? Celle ou le calendrier a un novembre.
+
+    Un calendrier d'alternance va d'aout a aout : il a donc DEUX aouts, et un
+    seul novembre. Sans annee donnee, on prend la premiere occurrence a partir
+    d'aujourd'hui -- « /calendrier aout » en janvier parle de l'aout qui vient,
+    pas de celui qui est passe."""
+    candidats = [(a, m) for a, m in _mois_du_calendrier(cal) if m == mois]
+    if not candidats:
+        return None
+    if annee:
+        annee = annee + 2000 if annee < 100 else annee
+        for a, m in candidats:
+            if a == annee:
+                return a
+        return None
+    auj = date.today()
+    for a, m in candidats:
+        if (a, m) >= (auj.year, auj.month):
+            return a
+    return candidats[0][0]
+
+
+def _fin_de_mois(annee, mois):
+    import calendar as _cal
+    return date(annee, mois, _cal.monthrange(annee, mois)[1])
+
+
+def _plus_mois(depart, nombre):
+    """La meme date, `nombre` mois plus tard, sans deborder sur le mois
+    suivant : le 31 janvier + 1 mois donne le 28 fevrier, pas le 3 mars."""
+    import calendar as _cal
+    total = depart.month - 1 + nombre
+    annee, mois = depart.year + total // 12, total % 12 + 1
+    return date(annee, mois, min(depart.day, _cal.monthrange(annee, mois)[1]))
+
+
+def fenetre_alternance(texte, cal):
+    """« quand » -> (debut, fin, mode, titre). ValueError si incomprehensible.
+
+    mode vaut "mois" (une ou plusieurs grilles mensuelles), "fenetre" (une
+    duree a partir d'aujourd'hui) ou "annee" (la vue d'ensemble).
+    """
+    brut = celcat.normaliser(texte)
+    auj = date.today()
+
+    if brut in ("annee", "annee", "tout", "toute l'annee", "annee entiere", "tous"):
+        return cal.debut, cal.fin, "annee", "Calendrier d'alternance"
+
+    # Rien : le mois en cours, ou le debut du calendrier s'il n'a pas commence.
+    if not brut or brut in ("auj", "aujourd'hui", "aujourdhui", "maintenant",
+                            "ce mois", "ce mois-ci", "mois"):
+        ancre = auj if cal.couvre(auj) else (cal.debut or auj)
+        return (date(ancre.year, ancre.month, 1),
+                _fin_de_mois(ancre.year, ancre.month), "mois", None)
+
+    if brut in ("semaine", "cette semaine", "la semaine"):
+        lundi = auj - timedelta(days=auj.weekday())
+        return lundi, lundi + timedelta(days=6), "fenetre", "Cette semaine"
+
+    # La prochaine fois qu'on remet les pieds a l'ecole : la question la plus
+    # posee, et celle a laquelle une grille de mois repond mal toute seule.
+    if brut in ("prochain", "prochaine", "cours", "ecole", "formation",
+                "prochain cours", "retour", "rentree"):
+        # Deja a l'ecole aujourd'hui ? Alors c'est de CETTE periode qu'on
+        # parle : repondre « dans trois semaines » a quelqu'un qui est en
+        # cours serait absurde.
+        p = cal.periode_de(auj) if cal.nature(auj) in alt.ECOLE \
+            else cal.suivante(auj, alt.ECOLE)
+        if p is None:
+            raise ValueError("Plus aucune période à l'école dans ce calendrier.")
+        return (date(p.debut.year, p.debut.month, 1),
+                _fin_de_mois(p.fin.year, p.fin.month), "mois",
+                "À l'école" if p.contient(auj) else "Prochain retour à l'école")
+
+    m = RE_ALT_MOIS_DUREE.match(brut)
+    if m:
+        nombre = max(1, min(13, int(m.group(1))))
+        return auj, _plus_mois(auj, nombre), "fenetre", \
+            f"Les {alt.compte_fr(nombre, 'mois', 'mois')} qui viennent"
+
+    m = RE_ALT_SEMAINES.match(brut)
+    if m:
+        nombre = max(1, min(60, int(m.group(1))))
+        return auj, auj + timedelta(days=7 * nombre), "fenetre", \
+            f"Les {alt.compte_fr(nombre, 'semaine')} qui viennent"
+
+    m = RE_ALT_MOIS_NUM.match(brut)
+    if m:
+        mois, annee = int(m.group(1)), int(m.group(2))
+        annee = annee + 2000 if annee < 100 else annee
+        if not 1 <= mois <= 12:
+            raise ValueError(f"« {texte} » : il n'y a pas de mois {mois}.")
+        return date(annee, mois, 1), _fin_de_mois(annee, mois), "mois", None
+
+    m = RE_ALT_JOURS.match(brut)
+    if m:
+        nombre = max(1, min(400, int(m.group(1))))
+        return auj, auj + timedelta(days=nombre), "fenetre", \
+            f"Les {alt.compte_fr(nombre, 'jour')} qui viennent"
+
+    m = RE_ALT_MOIS_NOM.match(brut)
+    if m:
+        mois = _mois_numero(m.group(1))
+        if mois:
+            annee = _choisir_annee(cal, mois, int(m.group(2)) if m.group(2) else None)
+            if annee is None:
+                raise ValueError(
+                    f"Le calendrier {cal.annee} ne couvre pas "
+                    f"{alt.MOIS_FR[mois - 1]}"
+                    + (f" {m.group(2)}." if m.group(2) else "."))
+            return date(annee, mois, 1), _fin_de_mois(annee, mois), "mois", None
+
+    raise ValueError(f"« {texte} » ne ressemble ni à un mois, ni à une durée.")
+
+
+def _boutons_alternance(cal, debut, fin, mode):
+    """Les boutons sous la carte : naviguer de mois en mois, revenir a
+    aujourd'hui, prendre du recul sur l'annee."""
+    auj = date.today()
+    mois_connus = _mois_du_calendrier(cal)
+    boutons = []
+
+    if mode == "mois" and mois_connus:
+        courant = (debut.year, debut.month)
+        ou = mois_connus.index(courant) if courant in mois_connus else None
+        precedent = mois_connus[ou - 1] if ou not in (None, 0) else None
+        suivant = mois_connus[ou + 1] if ou is not None and ou + 1 < len(mois_connus) \
+            else None
+        boutons.append(_b("◀", "alt", "m", _cle_mois(*precedent)) if precedent
+                       else _b("◀", "alt", "m", _cle_mois(*courant), inactif=True))
+        boutons.append(_b(alt.MOIS_FR[suivant[1] - 1].capitalize() + " ▶", "alt",
+                          "m", _cle_mois(*suivant)) if suivant
+                       else _b("▶", "alt", "m", _cle_mois(*courant), inactif=True))
+
+    if not (mode == "mois" and (debut.year, debut.month) == (auj.year, auj.month)):
+        boutons.append(_b("Ce mois-ci", "alt", "m", _cle_mois(auj.year, auj.month),
+                          style="bleu", emoji="📆"))
+    if mode != "fenetre":
+        boutons.append(_b("Les 21 jours qui viennent", "alt", "j", "21", emoji="⏳"))
+    if mode != "annee":
+        boutons.append(_b("L'année entière", "alt", "annee", style="vert", emoji="🗓️"))
+    else:
+        boutons.append(_b("Télécharger", "alt", "dl", emoji="⬇️"))
+    return boutons
+
+
+def _menu_alternance(cal, debut, mode):
+    """Le menu deroulant des mois : treize mois tiennent largement sous la
+    limite de vingt-cinq options, donc on les met tous, avec ce que chacun
+    contient en resume."""
+    options = []
+    for annee, mois in _mois_du_calendrier(cal):
+        fin_mois = _fin_de_mois(annee, mois)
+        comptes = cal.comptes(date(annee, mois, 1), fin_mois)
+        morceaux = [f"{n} j {alt.NOMS.get(nat, nat).lower()}"
+                    for nat, n in sorted(comptes.items(), key=lambda kv: -kv[1])
+                    if nat in (alt.FORMATION, alt.EXAMEN, alt.RATTRAPAGE)]
+        libelle = f"{alt.MOIS_FR[mois - 1].capitalize()} {annee}"
+        options.append((libelle, _cle_mois(annee, mois),
+                        " · ".join(morceaux)[:100] or "tout en entreprise", "📆"))
+    if not options:
+        return []
+    return [ui.Menu("altsel", "Choisir un mois…", options)]
+
+
+def _image_alternance(cal, debut, fin, mode, titre, sous_titre, aujourd_hui):
+    """La fonction de dessin de la vue demandee, prete pour _rendu()."""
+    if mode == "annee":
+        return lambda chemin: img.rendre_alternance_annee(
+            cal, chemin, aujourd_hui=aujourd_hui)
+    return lambda chemin: img.rendre_alternance(
+        cal, debut, fin, chemin, titre=titre, sous_titre=sous_titre,
+        aujourd_hui=aujourd_hui)
+
+
+async def vue_alternance(quand="", affichage="photo"):
+    """/calendrier — le rythme de l'alternance, en photo.
+
+    Le PDF de l'ecole est un tableau de treize colonnes qu'on ne lit pas sur
+    un telephone. On en redessine le contenu a la demande : le mois qu'on
+    veut, les semaines a venir, ou l'annee d'un coup -- et surtout le DETAIL
+    ecrit dessous, parce que « les examens, c'est quand ? » se repond avec des
+    dates, pas avec une couleur.
+    """
+    try:
+        cal = await asyncio.to_thread(alt.charger)
+    except (alt.CalendrierIntrouvable, OSError) as e:
+        return _sans_calendrier(e), []
+
+    try:
+        debut, fin, mode, titre = fenetre_alternance(quand, cal)
+    except ValueError as e:
+        return ui.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
+                         f"`3 mois`, ou `année`.", "Date incomprise"), []
+
+    auj = date.today()
+    if mode == "annee":
+        titre = titre or "Calendrier d'alternance"
+        sous = (f"{cal.annee} · l'année entière · "
+                f"{alt.intervalle_fr(cal.debut, cal.fin, court=True)}")
+    elif mode == "mois":
+        titre = titre or f"{alt.MOIS_FR[debut.month - 1].capitalize()} {debut.year}"
+        comptes = cal.comptes(debut, fin)
+        sous = f"{cal.annee} · " + (" · ".join(
+            f"{n} j {alt.NOMS.get(nat, nat).lower()}"
+            for nat, n in sorted(comptes.items(), key=lambda kv: -kv[1]))
+            or "aucun jour d'alternance")
+    else:
+        titre = titre or "Calendrier d'alternance"
+        sous = f"{cal.annee} · {alt.intervalle_fr(debut, fin)}"
+
+    boutons = _boutons_alternance(cal, debut, fin, mode)
+    menus = _menu_alternance(cal, debut, mode)
+    lignes = alt.bloc_resume(cal, auj)
+
+    if affichage == "texte":
+        lignes = lignes + [""] + (alt.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
+                                  or ["-# Aucune période sur cette fenêtre."])
+        return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
+                     menus=menus), []
+
+    fichier, souci = await _rendu(
+        _image_alternance(cal, debut, fin, mode, titre, sous, auj),
+        nom="alternance-annee" if mode == "annee" else f"alternance-{debut:%Y-%m}")
+    if fichier is None:
+        # Sans image, le texte dit la meme chose, en moins dense.
+        lignes = lignes + [""] + (alt.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
+                                  or ["-# Aucune période sur cette fenêtre."])
+        return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
+                     menus=menus, pied=souci), []
+
+    return carte(titre, lignes, "info", sous_titre=sous, image=fichier,
+                 boutons=boutons, menus=menus), [fichier]
+
+
+async def vue_alternance_telechargement():
+    """Le bouton « Télécharger » : la photo de l'année, et le PDF de l'école.
+
+    Deux fichiers pour deux usages : l'image se renvoie dans une conversation,
+    le PDF est le document officiel, celui qu'on montre a son entreprise."""
+    try:
+        cal = await asyncio.to_thread(alt.charger)
+    except (alt.CalendrierIntrouvable, OSError) as e:
+        return _sans_calendrier(e), []
+
+    auj = date.today()
+    fichiers, lignes = [], []
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_alternance_annee(cal, chemin, aujourd_hui=auj),
+        nom="alternance-annee")
+    if fichier is not None:
+        fichier.filename = f"alternance-{cal.annee}.png"
+        fichiers.append(fichier)
+        lignes.append(f"**{fichier.filename}** — l'année entière, en image.")
+    else:
+        lignes.append(f"⚠️ L'image n'a pas pu être faite : {souci}")
+
+    source = cal.source
+    if source is not None:
+        try:
+            octets = await asyncio.to_thread(source.read_bytes)
+        except OSError as e:
+            lignes.append(f"⚠️ Le PDF n'a pas pu être lu : {e}")
+        else:
+            if len(octets) > 9_000_000:
+                lignes.append(f"-# Le PDF `{source.name}` fait "
+                              f"{len(octets) // 1_000_000} Mo : trop lourd pour "
+                              f"Discord, va le chercher sur le serveur du bot.")
+            else:
+                fichiers.append(discord.File(io.BytesIO(octets), filename=source.name))
+                lignes.append(f"**{source.name}** — le calendrier officiel de "
+                              f"l'école, tel quel.")
+
+    lignes.append("-# Ces fichiers ne sont visibles que par toi. Clique sur l'un "
+                  "d'eux pour l'enregistrer.")
+    return carte("Alternance — à télécharger", lignes, "calme",
+                 sous_titre=f"{cal.annee}", telechargements=fichiers,
+                 boutons=[_b("Revoir le calendrier", "alt", "an", style="bleu",
+                             emoji="🗓️")]), fichiers
+
+
+def _sans_calendrier(souci):
+    """La carte qui s'affiche quand le PDF manque ou n'est pas lisible. Elle
+    dit quoi faire, pas seulement que ca n'a pas marche."""
+    return carte(
+        "Pas de calendrier d'alternance",
+        [str(souci),
+         "",
+         "Le bot lit le **PDF officiel de la promo**, posé à la racine du "
+         "projet — celui qui montre les semaines en entreprise et au centre.",
+         "-# Dépose-le à côté de `bot.py` (un nom qui contient « calendrier » "
+         "ou « alternance » suffit), ou désigne-le dans `config.yaml` : "
+         "`classe: calendrier: mon-fichier.pdf`."],
+        "alerte")
+
+
 # --- Les paris de l'assistant ------------------------------------------------
 async def vue_paris_assistant():
     """Des pronostics, tires de vraies donnees, presentes comme des paris.
@@ -2065,9 +2418,12 @@ def vue_panneau():
          _b("Parier", "pred", "ajout", style="vert", emoji="🎲"),
          _b("Sondage", "son", "ajout", style="vert", emoji="📊")],
         # La maquette n'apparait que si le classeur M3C est la : un bouton qui
-        # ne sait que s'excuser n'a rien a faire sur le panneau.
+        # ne sait que s'excuser n'a rien a faire sur le panneau. Le calendrier
+        # d'alternance suit la meme regle, et partage la rangee.
         ([_b("ECTS et coefficients", "pan", "ects", emoji="📘")]
-         if mq.disponible() else []),
+         if mq.disponible() else [])
+        + ([_b("Alternance", "pan", "alternance", emoji="🗓️")]
+           if alt.disponible() else []),
         [_b("Rappel", "rap", "ajout", emoji="⏰"),
          _b("Mes rappels", "pan", "rappels", emoji="📋"),
          _b("Anniversaires", "pan", "anniv", emoji="🎂"),
@@ -2119,6 +2475,11 @@ def texte_aide():
         "matière, ce qu'elle vaut en ECTS, son coefficient, ses heures et la "
         "façon dont elle est évaluée (contrôle continu ou examen terminal). "
         "Un bouton **⬇️ Télécharger** rend l'image et le classeur source",
+        "`/calendrier` — **le calendrier d'alternance en photo** : les semaines "
+        "en entreprise, au centre, les examens et les rattrapages, mois par "
+        "mois. `quand:` accepte un mois (`novembre`, `janvier 27`), une durée "
+        "(`+21`, `3 mois`) ou `année` pour tout voir d'un coup — et un menu "
+        "déroulant sous la carte pour sauter d'un mois à l'autre",
         "`/prediction` — **vos prédictions** 🔮 : qui va valider l'année, quel cours "
         "va sauter… chacun vote 👍👎, l'auteur tranche, le classement juge. "
         "`/parier` pour en poser une. Les paris de l'assistant 🤖 (chiffres réels) "
@@ -2391,6 +2752,8 @@ async def _vue_panneau(args, valeurs, inter=None):
         return await vue_examens()
     if quoi == "ects":
         return await vue_ects()
+    if quoi == "alternance":
+        return await vue_alternance()
     if quoi == "comparer":
         return await vue_comparer(celcat.semaine_de(auj))
     if quoi == "prediction":
@@ -2440,6 +2803,19 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         if args[:1] == ["dl"]:
             return await vue_ects_telechargement(args[1] if len(args) > 1 else "")
         return await vue_ects(args[0] if args else "")
+    if action == "alt":
+        quoi = args[0] if args else ""
+        if quoi == "dl":
+            return await vue_alternance_telechargement()
+        if quoi == "an":
+            return await vue_alternance("année")
+        if quoi == "j" and len(args) > 1:
+            return await vue_alternance(f"+{args[1]}")
+        if quoi == "m" and len(args) > 1:
+            return await vue_alternance(_quand_du_mois(args[1]))
+        return await vue_alternance()
+    if action == "altsel":
+        return await vue_alternance(_quand_du_mois(valeurs[0] if valeurs else ""))
     if action == "paris":
         return await vue_paris_assistant()
     if action == "pred":
@@ -2726,6 +3102,67 @@ async def cmd_examens(inter: discord.Interaction):
 ])
 async def cmd_ects(inter: discord.Interaction, semestre: str = ""):
     await _commande(inter, vue_ects(semestre))
+
+
+@bot.tree.command(name="calendrier",
+                  description="Le calendrier d'alternance : entreprise, cours, examens")
+@app_commands.describe(
+    quand="un mois (novembre, janvier 27), une durée (+21, 3 mois), ou « année » "
+          "— ce mois-ci par défaut",
+    affichage="photo par défaut ; texte si tu préfères copier-coller")
+@app_commands.choices(affichage=AFFICHAGE_CHOIX)
+async def cmd_calendrier(inter: discord.Interaction, quand: str = "",
+                         affichage: str = "photo"):
+    # La saisie est lue AVANT le defer : seule la premiere reponse peut etre
+    # ephemere, et une erreur de saisie n'a rien a faire dans le salon.
+    try:
+        fenetre_alternance(quand, await asyncio.to_thread(alt.charger))
+    except (alt.CalendrierIntrouvable, OSError):
+        pass                     # vue_alternance() le dira mieux, et dit quoi faire
+    except ValueError as e:
+        await inter.response.send_message(
+            view=ui.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
+                           f"`3 mois`, ou `année`.", "Date incomprise"),
+            ephemeral=True)
+        return
+    await _commande(inter, vue_alternance(quand, affichage))
+
+
+@cmd_calendrier.autocomplete("quand")
+async def auto_calendrier(inter: discord.Interaction, saisie: str):
+    """Les mois du calendrier, et les durees usuelles. Le champ reste libre :
+    ce qu'on tape vaut meme s'il ne figure pas dans la liste."""
+    bas = celcat.normaliser(saisie)
+    sortie = []
+    try:
+        cal = await asyncio.to_thread(alt.charger)
+    except Exception:                        # noqa: BLE001 - l'aide ne doit jamais casser
+        return []
+
+    if saisie.strip():
+        try:
+            debut, fin, mode, _ = fenetre_alternance(saisie, cal)
+            libelle = (f"{alt.MOIS_FR[debut.month - 1]} {debut.year}"
+                       if mode == "mois" else
+                       "l'année entière" if mode == "annee" else
+                       alt.intervalle_fr(debut, fin, court=True))
+            sortie.append(app_commands.Choice(name=f"➜ {libelle}"[:100],
+                                              value=saisie.strip()[:100]))
+        except ValueError:
+            pass
+
+    propositions = [("l'année entière", "année"),
+                    ("les 21 jours qui viennent", "+21"),
+                    ("les 3 mois qui viennent", "3 mois"),
+                    ("le prochain retour à l'école", "prochain")]
+    propositions += [(f"{alt.MOIS_FR[m - 1]} {a}", f"{alt.MOIS_FR[m - 1]} {a}")
+                     for a, m in _mois_du_calendrier(cal)]
+    for nom, valeur in propositions:
+        if len(sortie) >= 25:
+            break
+        if not bas or bas in celcat.normaliser(nom):
+            sortie.append(app_commands.Choice(name=nom[:100], value=valeur[:100]))
+    return sortie[:25]
 
 
 @bot.tree.command(name="prediction",

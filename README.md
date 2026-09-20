@@ -224,6 +224,39 @@ nouvelle version ? Tu remplaces le fichier, `/ects` suit **sans redémarrage**.
 Sans ce fichier, la commande explique où le mettre, et le bouton disparaît du
 panneau.
 
+### Il connaît le rythme de l'alternance
+
+`/calendrier` répond avec **le calendrier d'alternance en photo** : les
+semaines **en entreprise**, celles **au centre**, les **examens** et les
+**rattrapages**, mois par mois, avec aujourd'hui entouré et les numéros de
+semaine dans la marge. Sous la grille, **le détail écrit** — chaque période,
+ses dates exactes, ce qu'elle pèse en jours, et dans combien de temps elle
+tombe. Parce que « les examens, c'est quand ? » se répond avec des dates, pas
+avec une couleur.
+
+Un seul champ, trois façons de s'en servir :
+
+| Ce que tu tapes | Ce que tu obtiens |
+| --- | --- |
+| `/calendrier` | le mois en cours |
+| `/calendrier quand:novembre` · `janvier 27` | ce mois-là |
+| `/calendrier quand:+21` · `3 mois` · `2 semaines` | une fenêtre à partir d'aujourd'hui |
+| `/calendrier quand:année` | **l'année entière** : une ligne par mois, un carré par jour, et ce que pèse chaque nature |
+| `/calendrier quand:prochain` | le prochain retour à l'école |
+
+Et sous la carte, **un menu déroulant** qui liste tous les mois du
+calendrier — chacun annoté de ce qu'il contient (« 9 j formation au centre ») —
+plus `◀ ▶` pour passer de mois en mois sans retaper la commande.
+
+Ces dates ne sont recopiées nulle part dans le code : le bot lit **le PDF
+officiel de la promo** posé à côté de `bot.py`. Ce PDF n'a aucun texte — tout
+y a été converti en courbes à l'export — donc le bot y lit **la couleur des
+cases**, exactement ce que la légende du document définit. Il en déduit
+l'année scolaire en la recoupant avec les jours fériés et les week-ends, et le
+dit franchement s'il n'en est pas sûr. L'école publie une nouvelle version ?
+Tu remplaces le fichier, `/calendrier` suit **sans redémarrage**. Sans ce
+fichier, la commande explique où le mettre, et le bouton disparaît du panneau.
+
 ### Il répond aux commandes — et chaque réponse a ses boutons
 
 Chaque réponse est une **carte** : un bloc coloré qui contient le titre, la
@@ -252,6 +285,7 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/comparer [quand]` | **cette semaine contre la précédente** : heures, séances, trous, devoirs à rendre, et ce qui bouge matière par matière |
 | `/examens` | **compte à rebours** avant chaque examen — ceux de CELCAT et ceux de ton carnet réunis — et le temps libre pour réviser d'ici le premier |
 | `/ects [semestre]` | **la maquette de la promo en photo** : chaque UE, chaque matière, ses ECTS, son coefficient, ses heures de CM/TD/TP et **comment elle est évaluée** (contrôle continu ou examen terminal). Un bouton par semestre, une vue de l'année, et **⬇️ Télécharger** qui rend l'image et le classeur source |
+| `/calendrier [quand]` | **le calendrier d'alternance en photo** : entreprise, centre, examens, rattrapages. Un mois (`novembre`), une durée (`+21`, `3 mois`), ou `année` pour tout voir. Menu déroulant des mois, `◀ ▶` pour naviguer, et **⬇️ Télécharger** qui rend l'image et le PDF source |
 | `/prediction` | **vos prédictions** 🔮 : la liste, chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
 | `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise. **Sa carte part dans `#predictions`**, avec ses boutons de vote |
 | `/sondage` | **un vrai sondage Discord** : `question:`, `reponses:` (`🍕 Pizza ; 🍔 Burger`, vide = Oui / Non), `duree:`, `plusieurs:`. Le résultat est annoncé à la fin |
@@ -513,6 +547,7 @@ dépôt public. Tant qu'il n'y est pas, il ne descend pas avec `git pull`.
 
 ```bash
 scp M3C_*.xlsx utilisateur@ip_du_serveur:~/bot-cyu/
+scp calendrier*.pdf utilisateur@ip_du_serveur:~/bot-cyu/
 ```
 
 Puis, sur le serveur :
@@ -616,6 +651,7 @@ systemctl --user stop assistant-cyu
 | `rappels.py` | les rappels : la grammaire de « quand » (`demain 9h`, `dans 2h`, `lundi 14h`…) et leur stockage |
 | `anniversaires.py` | les anniversaires : qui, quand, le prochain, l'âge |
 | `maquette.py` | le classeur M3C de la promo, lu sans dépendance : UE, matières, ECTS, coefficients, mode d'évaluation |
+| `alternance.py` | le calendrier d'alternance de la promo, lu sans dépendance : les aplats de couleur du PDF, recalés sur de vraies dates |
 | `evenements.py` | les examens en événements Discord : ce qui devrait exister, ce qu'il faut créer, modifier, retirer |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |

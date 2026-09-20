@@ -332,6 +332,25 @@ classe:
   #   maquette: "M3C_ING2_FISA_Maths-Finance_Cergy_2026-2027.xlsx"
   maquette: ""
 
+  # /calendrier lit le CALENDRIER D'ALTERNANCE : le PDF publie par l'ecole,
+  # celui qui montre semaine par semaine si l'on est en entreprise, au centre,
+  # en examens ou en rattrapage.
+  #
+  # Laisse vide : le bot prend le premier PDF pose a cote de bot.py (ou dans
+  # donnees/) dont le nom contient « calendrier » ou « alternance ». Une
+  # nouvelle version ? Tu remplaces le fichier, /calendrier suit sans
+  # redemarrage.
+  #
+  # Chemin explicite possible (relatif au dossier du bot, ou absolu) :
+  #   calendrier: "calendrier_alternance.pdf"
+  calendrier: ""
+
+  # L'annee ou DEMARRE ce calendrier : 2026 pour un calendrier 2026-2027.
+  # Le PDF de l'ecole n'ayant pas de texte (tout y est dessine), le bot deduit
+  # l'annee des jours feries et des week-ends qu'il y reconnait. Ne remplis
+  # ceci que si /calendrier dit ne pas pouvoir la deviner.
+  calendrier_annee: 0
+
 
 # ─── Matieres ───────────────────────────────────────────────────────────────
 #
