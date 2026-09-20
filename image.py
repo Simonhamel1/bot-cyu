@@ -289,6 +289,22 @@ class Toile:
                 lignes[-1] = self.tronquer(lignes[-1] + " " + reste, largeur, taille, gras)
         return lignes
 
+    def coller(self, source, x, y, largeur, hauteur, teinte=None):
+        """Une image posee sur la toile, en coordonnees logiques.
+
+        `source` est une Image Pillow ; elle est redimensionnee a l'echelle
+        interne, donc le code appelant n'a jamais a y penser. `teinte` la
+        remplace par un aplat de cette couleur en gardant sa transparence :
+        c'est ce qui fait une silhouette a partir d'un dessin."""
+        e = self.e
+        boite = (max(1, round(largeur * e)), max(1, round(hauteur * e)))
+        vignette = source.convert("RGBA").resize(boite, Image.LANCZOS)
+        if teinte is not None:
+            plein = Image.new("RGBA", vignette.size, tuple(teinte) + (255,))
+            plein.putalpha(vignette.getchannel("A"))
+            vignette = plein
+        self.img.paste(vignette, (round(x * e), round(y * e)), vignette)
+
     def polygone(self, points, fond=None, contour=None):
         """Un polygone en coordonnees logiques : l'eclair, les fleches."""
         plats = []
@@ -2198,3 +2214,218 @@ def _totaux_alt(toile, y, cal):
                f"{round(100 * jours / total)} % de l'année",
                accent=_couleur_alt(nature))
     return y + 92 + 18
+
+
+# --- Le quiz Pokemon ----------------------------------------------------------
+# La silhouette est NOIRE sur un panneau clair, comme le generique d'origine.
+# L'inverse (une silhouette claire sur le fond sombre du bot) se lit tres mal :
+# les details d'un contour disparaissent des que le fond n'est pas franc.
+LARGEUR_QUIZ = 880
+PANNEAU_QUIZ = (58, 96, 168)         # le bleu du generique
+PANNEAU_REVELE = (34, 48, 78)        # le meme, calme, une fois la reponse donnee
+SILHOUETTE = (13, 14, 18)
+OR = (232, 186, 62)
+ARGENT = (178, 186, 198)
+BRONZE = (186, 126, 74)
+MEDAILLES = {1: OR, 2: ARGENT, 3: BRONZE}
+
+
+def _ouvrir_pokemon(chemin):
+    if not DISPONIBLE:
+        raise PillowManquant("Pillow n'est pas installe, donc pas d'image possible.")
+    return Image.open(chemin).convert("RGBA")
+
+
+def _cadrer(source):
+    """L'illustration recadree sur ce qu'elle dessine vraiment.
+
+    Les artworks officiels ont une marge transparente variable : sans ce
+    recadrage, deux Pokemon de meme taille apparaissent a deux echelles
+    differentes, et la silhouette d'un petit se perd au milieu du cadre."""
+    boite = source.getchannel("A").getbbox()
+    return source.crop(boite) if boite else source
+
+
+def _panneau_pokemon(toile, y, source, hauteur, fond, teinte=None, note=""):
+    """Le grand cadre qui porte l'image, silhouette ou revelation."""
+    toile.rect([MARGE, y, toile.largeur - MARGE, y + hauteur], fond=fond,
+               rayon=RAYON)
+    dessin = _cadrer(source)
+    marge = 26
+    dispo_l, dispo_h = toile.largeur - 2 * MARGE - 2 * marge, hauteur - 2 * marge
+    if note:
+        dispo_h -= 22
+    echelle = min(dispo_l / dessin.width, dispo_h / dessin.height)
+    larg, haut = dessin.width * echelle, dessin.height * echelle
+    toile.coller(dessin, (toile.largeur - larg) / 2, y + marge + (dispo_h - haut) / 2,
+                 larg, haut, teinte=teinte)
+    if note:
+        toile.texte(toile.largeur / 2, y + hauteur - 30, note, 12.5, False,
+                    _melanger(fond, (255, 255, 255), 0.65), aligne="centre")
+    return y + hauteur + 16
+
+
+def rendre_quiz(chemin_image, chemin=None, numero=None, total=None, secondes=None,
+                generation=None, indice=""):
+    """La question : une silhouette, et rien qui la trahisse.
+
+    Le numero de l'espece n'apparait nulle part, ni le nom du fichier : tout
+    ce qui pourrait donner la reponse reste hors de l'image."""
+    toile = Toile(LARGEUR_QUIZ, 640)
+    sous = []
+    if numero:
+        sous.append(f"question n°{numero}")
+    if generation:
+        sous.append(f"génération {generation}")
+    if secondes:
+        sous.append(f"{secondes // 60} min pour répondre" if secondes >= 120
+                    else f"{secondes} s pour répondre")
+    y = _entete(toile, "Qui est ce Pokémon ?", " · ".join(sous), accent=PANNEAU_QUIZ)
+    y = _panneau_pokemon(toile, y, _ouvrir_pokemon(chemin_image), 420,
+                         PANNEAU_QUIZ, teinte=SILHOUETTE,
+                         note=indice or "choisis le bon nom ci-dessous")
+    return toile.finir(chemin or (config.DONNEES / "quiz.png"), _pied(toile, y))
+
+
+def rendre_reponse(chemin_image, nom, numero, chemin=None, genre="", lignes=(),
+                   trouve=True):
+    """La revelation : le Pokemon en couleur, et qui l'a reconnu."""
+    lignes = [_sans_fioritures(l) for l in (lignes or ()) if l]
+    toile = Toile(LARGEUR_QUIZ, 700 + 24 * len(lignes))
+    y = _entete(toile, f"C'était {nom} !", f"n°{numero}" + (f" · {genre}" if genre else ""),
+                accent=VERT if trouve else ROUGE)
+    y = _panneau_pokemon(toile, y, _ouvrir_pokemon(chemin_image), 380, PANNEAU_REVELE)
+    for ligne in lignes:
+        toile.texte(MARGE, y, ligne, 14, False, TEXTE_MOYEN,
+                    largeur_max=toile.largeur - 2 * MARGE)
+        y += 24
+    return toile.finir(chemin or (config.DONNEES / "quiz-reponse.png"),
+                       _pied(toile, y + 4))
+
+
+# --- Le classement du quiz ------------------------------------------------------
+def _marche(toile, x, largeur, base, hauteur, rang, fiche):
+    """Une marche du podium : le nom au-dessus, les points dessus, le rang
+    dedans. La hauteur dit le classement sans qu'on ait a lire un chiffre."""
+    couleur = MEDAILLES.get(rang, TRAIT_FORT)
+    haut = base - hauteur
+    nom = str(fiche.get("nom") or "quelqu'un")
+
+    # Le nom et les points, posés au-dessus de la marche.
+    toile.texte(x + largeur / 2, haut - 52, nom, 15, True, TEXTE,
+                largeur_max=largeur + 16, aligne="centre")
+    toile.texte(x + largeur / 2, haut - 32, f"{fiche.get('points', 0)} pts", 14,
+                True, _eclaircir(couleur, 0.35), aligne="centre")
+
+    toile.rect([x, haut, x + largeur, base], fond=_melanger(FOND, couleur, 0.22),
+               rayon=10)
+    toile.rect([x, haut, x + largeur, haut + 4], fond=couleur, rayon=2)
+    toile.texte(x + largeur / 2, haut + (hauteur - 34) / 2, str(rang), 30, True,
+                _eclaircir(couleur, 0.5), aligne="centre")
+    detail = f"{fiche.get('bonnes', 0)}/{fiche.get('tentatives', 0)}"
+    toile.texte(x + largeur / 2, base - 26, detail, 11.5, False, TEXTE_FAIBLE,
+                aligne="centre")
+
+
+def _podium(toile, y, trois):
+    """Les trois premiers, en marches. L'ordre a l'ecran est 2 · 1 · 3 :
+    c'est celui d'un vrai podium, et le regard tombe d'abord au milieu."""
+    if not trois:
+        return y
+    hauteurs = {1: 150, 2: 112, 3: 88}
+    largeur = 180
+    ecart = 16
+    places = [r for r in (2, 1, 3) if r <= len(trois)]
+    total = len(places) * largeur + (len(places) - 1) * ecart
+    x = (toile.largeur - total) / 2
+    base = y + 200
+    for rang in places:
+        _marche(toile, x, largeur, base, hauteurs[rang], rang, trois[rang - 1][1])
+        x += largeur + ecart
+    toile.ligne([MARGE, base, toile.largeur - MARGE, base], TRAIT_FORT)
+    return base + 26
+
+
+def _ligne_classement(toile, y, rang, fiche, moi=False):
+    """Une ligne du classement, du 4e au dernier."""
+    hauteur = 46
+    if moi:
+        toile.rect([MARGE - 6, y - 4, toile.largeur - MARGE + 6, y + hauteur - 6],
+                   fond=CARTE, rayon=10)
+    couleur = MEDAILLES.get(rang, TEXTE_FAIBLE)
+    toile.texte(MARGE + 16, y + 6, f"{rang}", 16, True, couleur, aligne="centre")
+    toile.texte(MARGE + 40, y + 4, str(fiche.get("nom") or "quelqu'un"), 14.5,
+                moi, TEXTE, largeur_max=toile.largeur - 420)
+
+    detail = (f"{fiche.get('bonnes', 0)}/{fiche.get('tentatives', 0)} bonnes · "
+              f"{fiche.get('reussite', 0)} %")
+    if fiche.get("record", 0) >= 3:
+        detail += f" · série record {fiche['record']}"
+    toile.texte(MARGE + 40, y + 23, detail, 11.5, False, TEXTE_FAIBLE,
+                largeur_max=toile.largeur - 420)
+
+    # La barre de points : elle compare d'un coup d'oeil, ce qu'une colonne de
+    # chiffres ne fait jamais.
+    x0, x1 = toile.largeur - MARGE - 240, toile.largeur - MARGE - 90
+    part = fiche.get("_part", 0)
+    toile.rect([x0, y + 12, x1, y + 26], fond=CARTE_HAUTE, rayon=7)
+    if part > 0:
+        toile.rect([x0, y + 12, max(x0 + 6, x0 + (x1 - x0) * part), y + 26],
+                   fond=_melanger(ACCENT, OR, 0.3) if rang <= 3 else ACCENT, rayon=7)
+    toile.texte(toile.largeur - MARGE, y + 6, f"{fiche.get('points', 0)} pts", 15,
+                True, TEXTE, aligne="droite")
+    return y + hauteur
+
+
+def rendre_classement_pokemon(rangs, chemin=None, moi=None, parties=0, sous_titre=""):
+    """Le classement : un podium, puis la liste, puis ce que pese la promo.
+
+    `rangs` est ce que rend pokemon.classement() : [(rang, fiche)].
+    `moi` surligne la ligne de celui qui a demande -- se chercher dans une
+    liste de dix noms est la premiere chose qu'on y fait.
+    """
+    rangs = list(rangs or ())
+    if not rangs:
+        toile = Toile(LARGEUR_QUIZ, 320)
+        y = _entete(toile, "Classement", "personne n'a encore joué", accent=OR)
+        toile.texte(MARGE, y + 10, "Lance une première question avec /quiz.", 14,
+                    False, TEXTE_MOYEN)
+        return toile.finir(chemin or (config.DONNEES / "quiz-classement.png"),
+                           _pied(toile, y + 48))
+
+    maxi = max(f.get("points", 0) for _, f in rangs) or 1
+    for _, f in rangs:
+        f["_part"] = f.get("points", 0) / maxi
+
+    trois = rangs[:3]
+    reste = rangs[3:]
+    toile = Toile(LARGEUR_QUIZ,
+                  300 + (240 if trois else 0) + 46 * len(reste) + 260)
+    y = _entete(toile, "Qui est ce Pokémon ? — le classement",
+                sous_titre or f"{len(rangs)} joueur{'s' if len(rangs) > 1 else ''}"
+                + (f" · {parties} question{'s' if parties > 1 else ''} posée"
+                   f"{'s' if parties > 1 else ''}" if parties else ""),
+                accent=OR)
+    y = _podium(toile, y + 30, trois)
+    for rang, fiche in reste:
+        y = _ligne_classement(toile, y, rang, fiche, moi=str(fiche.get("id")) == str(moi))
+    y += 14
+
+    # Trois chiffres qui racontent la promo, pas seulement le vainqueur.
+    meilleure = max(rangs, key=lambda rf: rf[1].get("record", 0))[1]
+    plus_sur = max(rangs, key=lambda rf: (rf[1].get("reussite", 0),
+                                          rf[1].get("tentatives", 0)))[1]
+    tentatives = sum(f.get("tentatives", 0) for _, f in rangs)
+    largeur = (toile.largeur - 2 * MARGE - 24) / 3
+    _tuile(toile, MARGE, y, largeur, 92, "meilleure série",
+           f"{meilleure.get('record', 0)} d'affilée", meilleure.get("nom", ""),
+           accent=OR)
+    _tuile(toile, MARGE + largeur + 12, y, largeur, 92, "plus sûr",
+           f"{plus_sur.get('reussite', 0)} %", plus_sur.get("nom", ""), accent=VERT)
+    _tuile(toile, MARGE + 2 * (largeur + 12), y, largeur, 92, "réponses données",
+           str(tentatives), f"par {len(rangs)} joueur"
+           f"{'s' if len(rangs) > 1 else ''}", accent=ACCENT)
+    y += 92 + 16
+
+    return toile.finir(chemin or (config.DONNEES / "quiz-classement.png"),
+                       _pied(toile, y))

@@ -431,6 +431,16 @@ CALENDRIER_FICHIER = _txt(_classe, "calendrier", "")
 # remplir que si /calendrier dit ne pas pouvoir la deviner.
 CALENDRIER_ANNEE = _entier(_classe, "calendrier_annee", 0)
 
+# Le quiz « Qui est ce Pokemon ? ». Une question par jour, a heure fixe, dans
+# son salon. false = le jeu reste la, mais il faut lancer /quiz a la main.
+QUIZ_AUTO = _bool(_classe, "quiz_auto", False)
+QUIZ_HEURE = _txt(_classe, "quiz_heure", "18:00")
+QUIZ_JOURS = _liste_entiers(_classe, "quiz_jours")
+# Dans quel salon : un nom de salon du bot (« predictions », « general »...).
+QUIZ_SALON = _txt(_classe, "quiz_salon", "predictions")
+# 0 = tout le Pokedex ; 1 a 9 = une seule generation, pour rester jouable.
+QUIZ_GENERATION = _entier(_classe, "quiz_generation", 0)
+
 
 # --- Matieres ----------------------------------------------------------------
 MATIERES = BRUT.get("matieres") if isinstance(BRUT.get("matieres"), dict) else {}

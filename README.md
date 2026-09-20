@@ -257,6 +257,41 @@ dit franchement s'il n'en est pas sûr. L'école publie une nouvelle version ?
 Tu remplaces le fichier, `/calendrier` suit **sans redémarrage**. Sans ce
 fichier, la commande explique où le mettre, et le bouton disparaît du panneau.
 
+### Il fait jouer la promo — « Qui est ce Pokémon ? »
+
+`/quiz` poste une **silhouette** et quatre noms. Une seule tentative chacun,
+le premier qui trouve prend la prime, et ceux qui veulent le mode difficile
+cliquent sur **⌨️ Je tape le nom** — ça rapporte plus, forcément.
+
+La question **reste ouverte jusqu'au bout** : le plus rapide gagne sa prime,
+il ne clôt pas le jeu pour les autres. À la fin du temps, le bot réécrit sa
+propre carte — le Pokémon apparaît en couleur, avec qui l'a reconnu.
+
+| Ce que tu tapes | Ce que tu obtiens |
+| --- | --- |
+| `/quiz` | une nouvelle question |
+| `/quiz generation:1` | s'en tenir aux 151 premiers — ceux que tout le monde connaît |
+| `/quiz quoi:le classement` | **le podium de la promo**, en photo |
+
+Le **classement** est une image à lui tout seul : un podium à trois marches,
+la liste en dessous avec une barre par joueur, et trois chiffres qui racontent
+la promo — la **meilleure série**, le **plus sûr** (taux de bonnes réponses),
+et le nombre de réponses données. Ta propre ligne est surlignée.
+
+Les points : **3** pour une bonne réponse, **+2** au premier qui trouve,
+**+2** si tu as tapé le nom au lieu de cliquer, **+1** dès trois bonnes
+d'affilée. Une mauvaise réponse remet ta série à zéro.
+
+Avec `quiz_auto: true` dans `config.yaml`, **une question tombe toute seule**
+chaque jour à l'heure dite, dans le salon des jeux — un jeu qu'il faut penser
+à lancer ne se joue qu'une fois.
+
+Les 1025 noms français et les illustrations viennent de **PokéAPI**,
+téléchargés une seule fois puis gardés dans `donnees/`. Le bot **ne lit pas
+les messages du serveur** pour autant : tout passe par des boutons et un
+formulaire, donc l'intent « contenu des messages » reste inutile — comme pour
+le reste du projet.
+
 ### Il répond aux commandes — et chaque réponse a ses boutons
 
 Chaque réponse est une **carte** : un bloc coloré qui contient le titre, la
@@ -288,6 +323,7 @@ rien en mémoire. Un message d'il y a un mois marche encore.
 | `/calendrier [quand]` | **le calendrier d'alternance en photo** : entreprise, centre, examens, rattrapages. Un mois (`novembre`), une durée (`+21`, `3 mois`), ou `année` pour tout voir. Menu déroulant des mois, `◀ ▶` pour naviguer, et **⬇️ Télécharger** qui rend l'image et le PDF source |
 | `/prediction` | **vos prédictions** 🔮 : la liste, chacun vote 👍👎, l'auteur tranche, un classement dit qui avait raison (prophètes et parieurs). Les paris de l'assistant 🤖 — le cours qui va bouger, le jour où tu vas craquer, le jour du parapluie, des vrais chiffres et des fausses cotes — sont derrière un bouton |
 | `/parier` | poser une prédiction : le texte, d'ici quand (date ou en toutes lettres), la mise. **Sa carte part dans `#predictions`**, avec ses boutons de vote |
+| `/quiz [generation]` | **Qui est ce Pokémon ?** 🏆 une silhouette, quatre noms, une tentative chacun. Le premier qui trouve prend la prime, `⌨️ Je tape le nom` rapporte plus. `quoi: le classement` pour le **podium de la promo** en photo |
 | `/sondage` | **un vrai sondage Discord** : `question:`, `reponses:` (`🍕 Pizza ; 🍔 Burger`, vide = Oui / Non), `duree:`, `plusieurs:`. Le résultat est annoncé à la fin |
 | `/rappel` | `quand:demain 9h texte:rendre le TP` — le bot te mentionne à l'heure dite, là où tu l'as posé. `qui: tout le salon` pour un @here |
 | `/rappels` | tes rappels en attente, un menu pour en annuler |
@@ -652,6 +688,7 @@ systemctl --user stop assistant-cyu
 | `anniversaires.py` | les anniversaires : qui, quand, le prochain, l'âge |
 | `maquette.py` | le classeur M3C de la promo, lu sans dépendance : UE, matières, ECTS, coefficients, mode d'évaluation |
 | `alternance.py` | le calendrier d'alternance de la promo, lu sans dépendance : les aplats de couleur du PDF, recalés sur de vraies dates |
+| `pokemon.py` | le quiz « Qui est ce Pokémon ? » : le catalogue PokéAPI, le tirage, les points et le classement |
 | `evenements.py` | les examens en événements Discord : ce qui devrait exister, ce qu'il faut créer, modifier, retirer |
 | `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
 | `statut.py` | le panneau de `#statut` et le tableau de `#edt` |

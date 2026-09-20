@@ -19,6 +19,8 @@ C'est le fichier a lancer au quotidien. Un seul processus fait les deux choses :
     /stats [quand]      ce que pese ta semaine : heures, matieres, trous
     /comparer, /examens la semaine contre la precedente ; le compte a rebours
     /prediction, /parier  le jeu de la promo : on parie, on vote, on tranche
+    /quiz [generation]  « Qui est ce Pokemon ? » : une silhouette, quatre
+                        noms, et le classement de la promo
     /sondage            un vrai sondage Discord, resultat annonce a la fin
     /rappel, /rappels   « demain 9h : rendre le TP », le bot te mentionne
     /anniversaire(s)    le tien, et les prochains de la promo
@@ -96,6 +98,7 @@ import interface as ui
 import maquette as mq
 import meteo
 import notif
+import pokemon as pk
 import predictions as pr
 import rappels as rp
 import sondages as sd
@@ -1460,6 +1463,296 @@ def _sans_calendrier(souci):
         "alerte")
 
 
+
+# --- Le quiz Pokemon ----------------------------------------------------------
+# Le jeu tient en trois cartes : la QUESTION (une silhouette, quatre boutons),
+# la REPONSE (le Pokemon en couleur, qui a trouve), et le CLASSEMENT.
+#
+# Une regle a garder en tete en relisant : le bot ne lit pas les messages du
+# salon (pas d'intent « contenu des messages »). Tout passe donc par des
+# composants -- boutons pour les quatre propositions, formulaire pour ceux qui
+# veulent taper le nom eux-memes.
+GENERATION_CHOIX = [
+    app_commands.Choice(name="toutes les générations", value=0),
+] + [app_commands.Choice(name=f"génération {g} (n°{a} à {b})", value=g)
+     for g, (a, b) in pk.GENERATIONS.items()]
+
+
+def _sans_quiz(souci):
+    """La carte qui s'affiche quand le jeu ne peut pas demarrer."""
+    return carte(
+        "Le quiz n'est pas prêt",
+        [str(souci),
+         "",
+         "Le bot a besoin de la **liste des Pokémon** (leurs noms français) et "
+         "de leurs illustrations. Il les télécharge tout seul la première fois, "
+         "depuis PokéAPI.",
+         "-# S'il n'a pas Internet, ou si le téléchargement a échoué, réessaie "
+         "plus tard : rien n'est cassé, il manque seulement le catalogue."],
+        "alerte")
+
+
+def _boutons_quiz(quiz):
+    """Les quatre propositions, plus le mode difficile.
+
+    Le libelle porte le NOM, mais l'identifiant ne porte que la POSITION du
+    bouton : « cyu:quiz:r:a3f9:2 ». Ainsi rien de ce qui circule ne trahit la
+    reponse, et deux quiz ne peuvent pas se melanger."""
+    propositions = [_b(pk.nom(numero), "quiz", "r", quiz["id"], str(i))
+                    for i, numero in enumerate(quiz.get("choix", []))]
+    return [propositions[:4],
+            [_b("Je tape le nom", "quiz", "tape", quiz["id"], style="vert",
+                emoji="⌨️"),
+             _b("Classement", "quiz", "classement", emoji="🏆")]]
+
+
+async def vue_quiz(generation=0, salon_id=None):
+    """Poser une nouvelle question."""
+    try:
+        await asyncio.to_thread(pk.catalogue)
+    except pk.PokemonIndisponible as e:
+        return _sans_quiz(e), []
+
+    generation = int(generation or 0) or None
+    try:
+        espece, choix = await asyncio.to_thread(
+            pk.tirer, generation, 4, pk.derniers(8))
+        chemin_source = await asyncio.to_thread(pk.image, espece)
+    except pk.PokemonIndisponible as e:
+        return _sans_quiz(e), []
+
+    quiz = await asyncio.to_thread(pk.ouvrir, espece, choix, salon_id)
+    secondes = pk.DUREE_MINUTES * 60
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_quiz(chemin_source, chemin,
+                                       numero=pk.total_joue(),
+                                       generation=generation, secondes=secondes),
+        nom="quiz")
+
+    sous = f"question n°{pk.total_joue()}"
+    if generation:
+        sous += f" · génération {generation}"
+    sous += f" · {pk.DUREE_MINUTES} min"
+    lignes = ["Une seule tentative par personne — réfléchis bien.",
+              f"-# ✅ {pk.POINTS_JUSTE} pts · 🥇 +{pk.PRIME_PREMIER} au premier · "
+              f"⌨️ +{pk.PRIME_TAPE} si tu tapes le nom · 🔥 +{pk.PRIME_SERIE} "
+              f"dès {pk.SERIE_MINIMUM} bonnes d'affilée"]
+    if fichier is None:
+        lignes.insert(0, f"⚠️ L'image n'a pas pu être faite : {souci}")
+    return carte("Qui est ce Pokémon ?", lignes, "info", sous_titre=sous,
+                 image=fichier, boutons=_boutons_quiz(quiz)), \
+        ([fichier] if fichier else [])
+
+
+async def vue_quiz_reponse(quiz, note=""):
+    """La revelation : le Pokemon en couleur, et qui l'a reconnu."""
+    espece = int(quiz.get("espece", 0))
+    try:
+        chemin_source = await asyncio.to_thread(pk.image, espece)
+    except pk.PokemonIndisponible:
+        chemin_source = None
+
+    lignes = pk.bloc_resultat(quiz)
+    if note:
+        lignes.insert(0, note)
+    trouve = any(r.get("juste") for r in quiz.get("reponses", {}).values())
+    boutons = [_b("Une autre !", "quiz", "neuf", style="vert", emoji="🎲"),
+               _b("Classement", "quiz", "classement", emoji="🏆")]
+
+    fichier = None
+    if chemin_source is not None:
+        fichier, souci = await _rendu(
+            lambda chemin: img.rendre_reponse(
+                chemin_source, pk.nom(espece), espece, chemin,
+                genre=pk.genre(espece), lignes=pk.bloc_resultat(quiz),
+                trouve=trouve),
+            nom=f"pokemon-{espece}")
+        if fichier is None:
+            lignes.append(f"-# L'image n'a pas pu être faite : {souci}")
+    return carte(f"C'était {pk.nom(espece)} !", lignes,
+                 "calme" if trouve else "devoir",
+                 sous_titre=f"n°{espece}"
+                 + (f" · {pk.genre(espece)}" if pk.genre(espece) else ""),
+                 image=fichier, boutons=boutons), ([fichier] if fichier else [])
+
+
+async def vue_quiz_classement(moi=None):
+    """Le classement : le podium, la liste, et ce que pese la promo."""
+    rangs = await asyncio.to_thread(pk.classement, 10)
+    parties = pk.total_joue()
+    fichier, souci = await _rendu(
+        lambda chemin: img.rendre_classement_pokemon(
+            rangs, chemin, moi=moi, parties=parties),
+        nom="quiz-classement")
+
+    lignes = []
+    if moi is not None:
+        f = await asyncio.to_thread(pk.fiche, moi)
+        if f.get("tentatives"):
+            lignes.append(
+                f"**Toi** : {f['points']} pts · {f['bonnes']}/{f['tentatives']} "
+                f"bonnes ({f['reussite']} %)"
+                + (f" · {f['rang']}ᵉ" if f.get("rang") else "")
+                + (f" · série en cours **{f['serie']}** 🔥" if f.get("serie", 0) >= 2
+                   else ""))
+        else:
+            lignes.append("-# Tu n'as pas encore joué : clique une réponse sur la "
+                          "prochaine question.")
+    boutons = [_b("Nouvelle question", "quiz", "neuf", style="vert", emoji="🎲"),
+               _b("Actualiser", "quiz", "classement", emoji="🔄")]
+    if fichier is None:
+        lignes += pk.bloc_classement(10)
+        return carte("Qui est ce Pokémon ? — le classement", lignes, "info",
+                     boutons=boutons, pied=souci), []
+    return carte("Qui est ce Pokémon ? — le classement", lignes, "info",
+                 image=fichier, boutons=boutons), [fichier]
+
+
+class ModaleQuiz(discord.ui.Modal, title="Qui est ce Pokémon ?"):
+    """Le mode difficile : on tape le nom, sans les quatre propositions.
+
+    C'est la seule facon d'ecrire une reponse sans que le bot ait a lire les
+    messages du salon -- et ca vaut plus cher, parce que c'est plus dur."""
+
+    nom = discord.ui.TextInput(label="Son nom", placeholder="Pikachu",
+                               max_length=40, required=True)
+
+    def __init__(self, quiz_id):
+        super().__init__()
+        self.quiz_id = quiz_id
+
+    async def on_submit(self, inter: discord.Interaction):
+        await _jouer(inter, self.quiz_id, tape=str(self.nom))
+
+
+async def _jouer(inter, quiz_id, choix=None, tape=None):
+    """Une reponse, d'ou qu'elle vienne : un bouton ou le formulaire.
+
+    Le joueur recoit TOUJOURS un mot en prive -- juste ou faux, il doit savoir
+    que son clic a compte. La carte publique, elle, n'est reecrite que quand la
+    reponse est revelee : sinon le premier clic afficherait le resultat a tout
+    le monde.
+    """
+    quiz = await asyncio.to_thread(pk.par_id, quiz_id)
+    numero = None
+    if quiz is not None and choix is not None:
+        try:
+            numero = int(quiz.get("choix", [])[int(choix)])
+        except (ValueError, IndexError):
+            numero = None
+
+    etat, quiz, points = await asyncio.to_thread(
+        pk.repondre, quiz_id, inter.user.id, inter.user.display_name,
+        numero, tape)
+
+    if etat == "inconnu":
+        await inter.response.send_message(
+            "Cette question n'existe plus. `/quiz` pour en lancer une nouvelle.",
+            ephemeral=True)
+        return
+    if etat == "deja":
+        await inter.response.send_message(
+            "Tu as déjà répondu à celle-ci — une seule tentative par personne.",
+            ephemeral=True)
+        return
+    if etat == "clos":
+        await inter.response.send_message(
+            f"Trop tard, la réponse est déjà tombée : c'était **"
+            f"{pk.nom(quiz.get('espece', 0))}**.", ephemeral=True)
+        return
+
+    if etat == "juste":
+        f = await asyncio.to_thread(pk.fiche, inter.user.id)
+        mot = f"✅ **Bien vu !** +{points} pts."
+        if f.get("serie", 0) >= pk.SERIE_MINIMUM:
+            mot += f" 🔥 **{f['serie']} d'affilée.**"
+        mot += f"\n-# Total : {f.get('points', 0)} pts."
+    else:
+        mot = "❌ Raté" + (f" — tu as tapé « {tape} »." if tape else ".")
+    # La question reste OUVERTE jusqu'au bout, meme quand quelqu'un a trouve.
+    # La clore au premier bon clic donnerait la reponse a toute la promo avant
+    # que les autres aient eu le temps de regarder : le plus rapide gagne sa
+    # prime, il ne prend pas le jeu des autres.
+    mot += "\n-# Chut — la réponse tombe quand le temps est écoulé."
+    await inter.response.send_message(mot, ephemeral=True)
+
+
+async def _reveler(quiz_id, inter=None, message=None):
+    """Clore une question et reecrire sa carte, ou qu'elle soit.
+
+    On retrouve le message par ce que le quiz a retenu (salon et message) :
+    c'est ce qui permet de reveler une question posee il y a trois minutes,
+    meme si le bot a redemarre entre-temps.
+    """
+    quiz = await asyncio.to_thread(pk.reveler, quiz_id)
+    if quiz is None:
+        return
+    vue_, fichiers = await vue_quiz_reponse(quiz)
+    if message is None:
+        message = await _message_du_quiz(quiz)
+    if message is None:
+        # Le message a disparu : on repond au moins a qui vient de jouer.
+        if inter is not None:
+            await inter.followup.send(view=vue_, files=fichiers, ephemeral=True)
+        return
+    try:
+        await message.edit(view=vue_, attachments=fichiers)
+    except discord.HTTPException:
+        pass
+
+
+async def _message_du_quiz(quiz):
+    """Le message Discord qui porte une question, ou None."""
+    if not (quiz.get("salon_id") and quiz.get("message_id")):
+        return None
+    try:
+        salon = await _salon(quiz["salon_id"])
+        return await salon.fetch_message(int(quiz["message_id"]))
+    except (discord.HTTPException, ValueError):
+        return None
+
+
+async def _tic_quiz(maintenant):
+    """Les questions dont le temps est ecoule, revelees.
+
+    Sans ca, une question que personne ne trouve resterait ouverte pour
+    toujours, et son classement ne bougerait jamais."""
+    for quiz in await asyncio.to_thread(pk.a_reveler, maintenant):
+        await _reveler(quiz["id"])
+
+
+async def _tic_quiz_du_jour(maintenant):
+    """La question quotidienne, posée toute seule dans son salon.
+
+    Un jeu qu'il faut penser a lancer ne se joue qu'une fois. Celui-ci vient
+    a heure fixe, comme les briefings, et les jours creux restent creux :
+    on suit les memes jours que le briefing du matin.
+    """
+    if not config.QUIZ_AUTO:
+        return
+    salon_id = config.salon_bot(config.QUIZ_SALON) or config.salon_bot("predictions")
+    if not salon_id:
+        return
+    if config.QUIZ_JOURS and maintenant.weekday() not in config.QUIZ_JOURS:
+        return
+    cle = f"quiz:{maintenant.date()}"
+    moment = vue.a_heure(maintenant.date(), config.QUIZ_HEURE, (18, 0))
+    if _deja(cle) or not assistant._du(moment, maintenant, fenetre_min=10):
+        return
+
+    # On marque AVANT d'envoyer : si l'envoi echoue, mieux vaut sauter une
+    # question que d'en poster douze au prochain tour de boucle.
+    _marquer(cle)
+    vue_, fichiers = await vue_quiz(config.QUIZ_GENERATION, salon_id)
+    salon = await _salon(salon_id)
+    message = await salon.send(view=vue_, files=fichiers)
+    recent = (await asyncio.to_thread(pk.lire)).get("quiz") or [{}]
+    if recent[0].get("id"):
+        await asyncio.to_thread(pk.retenir_message, recent[0]["id"], message.id,
+                                salon_id)
+    print(f"{maintenant:%H:%M} | quiz Pokémon du jour posté", flush=True)
+
+
 # --- Les paris de l'assistant ------------------------------------------------
 async def vue_paris_assistant():
     """Des pronostics, tires de vraies donnees, presentes comme des paris.
@@ -2423,7 +2716,9 @@ def vue_panneau():
         ([_b("ECTS et coefficients", "pan", "ects", emoji="📘")]
          if mq.disponible() else [])
         + ([_b("Alternance", "pan", "alternance", emoji="🗓️")]
-           if alt.disponible() else []),
+           if alt.disponible() else [])
+        + ([_b("Quiz Pokémon", "pan", "quiz", emoji="🏆")]
+           if pk.disponible() else []),
         [_b("Rappel", "rap", "ajout", emoji="⏰"),
          _b("Mes rappels", "pan", "rappels", emoji="📋"),
          _b("Anniversaires", "pan", "anniv", emoji="🎂"),
@@ -2488,6 +2783,11 @@ def texte_aide():
         "messages » requis",
         "",
         "### La promo",
+        "`/quiz` — **Qui est ce Pokémon ?** 🏆 une silhouette, quatre noms, "
+        "une seule tentative chacun. Le premier qui trouve prend la prime, et "
+        "`Je tape le nom` rapporte plus. `generation:` pour s'en tenir aux 151 "
+        "premiers. `quoi: le classement` — **le podium de la promo**, les séries "
+        "record et le taux de réussite de chacun",
         "`/sondage` — **un vrai sondage Discord** : `question:`, `reponses:` "
         "(« 🍕 Pizza ; 🍔 Burger », vide = Oui / Non), la durée, plusieurs réponses "
         "ou pas. **Le résultat est annoncé à la fin**",
@@ -2681,6 +2981,12 @@ async def _agir(inter, args, valeurs, action):
     if args[:1] == ["ajout"] and action in FORMULAIRES:
         await inter.response.send_modal(FORMULAIRES[action](args))
         return
+    if action == "quiz" and args[:1] == ["tape"] and len(args) > 1:
+        await inter.response.send_modal(ModaleQuiz(args[1]))
+        return
+    if action == "quiz" and args[:1] == ["r"] and len(args) > 2:
+        await _jouer(inter, args[1], choix=args[2])
+        return
     if action == "clear":
         await _nettoyer(inter, args)
         return
@@ -2754,6 +3060,8 @@ async def _vue_panneau(args, valeurs, inter=None):
         return await vue_ects()
     if quoi == "alternance":
         return await vue_alternance()
+    if quoi == "quiz":
+        return await vue_quiz_classement(inter.user.id if inter is not None else None)
     if quoi == "comparer":
         return await vue_comparer(celcat.semaine_de(auj))
     if quoi == "prediction":
@@ -2816,6 +3124,21 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         return await vue_alternance()
     if action == "altsel":
         return await vue_alternance(_quand_du_mois(valeurs[0] if valeurs else ""))
+    if action == "quiz":
+        quoi = args[0] if args else "classement"
+        if quoi == "classement":
+            return await vue_quiz_classement(inter.user.id if inter else None)
+        if quoi == "neuf":
+            vue_, fichiers = await vue_quiz(
+                0, inter.channel_id if inter else None)
+            # La carte remplace le message qui portait le bouton : c'est donc
+            # CE message-la que la boucle devra reecrire a la revelation.
+            if inter is not None and inter.message is not None:
+                recent = pk.lire().get("quiz") or [{}]
+                if recent[0].get("id"):
+                    await asyncio.to_thread(pk.retenir_message, recent[0]["id"],
+                                            inter.message.id, inter.channel_id)
+            return vue_, fichiers
     if action == "paris":
         return await vue_paris_assistant()
     if action == "pred":
@@ -3163,6 +3486,34 @@ async def auto_calendrier(inter: discord.Interaction, saisie: str):
         if not bas or bas in celcat.normaliser(nom):
             sortie.append(app_commands.Choice(name=nom[:100], value=valeur[:100]))
     return sortie[:25]
+
+
+@bot.tree.command(name="quiz", description="Qui est ce Pokémon ? — le jeu de la promo")
+@app_commands.describe(
+    generation="limiter le tirage à une génération (toutes par défaut)",
+    quoi="poser une question, ou voir le classement")
+@app_commands.choices(generation=GENERATION_CHOIX, quoi=[
+    app_commands.Choice(name="une nouvelle question", value="question"),
+    app_commands.Choice(name="le classement", value="classement"),
+])
+async def cmd_quiz(inter: discord.Interaction, generation: int = 0,
+                   quoi: str = "question"):
+    if quoi == "classement":
+        await _commande(inter, vue_quiz_classement(inter.user.id))
+        return
+    await inter.response.defer(thinking=True)
+    vue_, fichiers = await vue_quiz(generation, inter.channel_id)
+    await repondre(inter, vue_, fichiers)
+    # On retient OU la question a ete posee : la boucle en a besoin pour la
+    # reveler quand le temps sera ecoule, meme apres un redemarrage.
+    try:
+        message = await inter.original_response()
+        dernier = pk.lire().get("quiz", [{}])[0]
+        if dernier.get("id"):
+            await asyncio.to_thread(pk.retenir_message, dernier["id"],
+                                    message.id, inter.channel_id)
+    except discord.HTTPException:
+        pass
 
 
 @bot.tree.command(name="prediction",
@@ -3544,7 +3895,8 @@ async def _tic_evenements(maintenant):
 
 TACHES = (("rappels", _tic_rappels), ("anniversaires", _tic_anniversaires),
           ("sondages", _tic_sondages), ("predictions", _tic_recap_predictions),
-          ("evenements", _tic_evenements))
+          ("evenements", _tic_evenements), ("quiz", _tic_quiz),
+          ("quiz du jour", _tic_quiz_du_jour))
 
 
 @tasks.loop(seconds=30)

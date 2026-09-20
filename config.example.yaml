@@ -351,6 +351,24 @@ classe:
   # ceci que si /calendrier dit ne pas pouvoir la deviner.
   calendrier_annee: 0
 
+  # Le jeu « Qui est ce Pokemon ? » (/quiz) : une silhouette, quatre noms, et
+  # un classement de la promo. Le jeu marche toujours a la demande ; ceci ne
+  # regle que la QUESTION QUOTIDIENNE, posee toute seule a heure fixe.
+  #
+  # Les noms francais des Pokemon et leurs illustrations sont telecharges
+  # depuis PokeAPI la premiere fois, puis gardes dans donnees/.
+  quiz_auto: false
+  quiz_heure: "18:00"
+  # Les jours ou la question tombe (0 = lundi ... 6 = dimanche). Vide = tous
+  # les jours. Par exemple [0, 1, 2, 3, 4] pour ne pas jouer le week-end.
+  quiz_jours: []
+  # Dans quel salon du bot : « predictions » (le salon des jeux), « annonces »,
+  # « commandes »... Voir la section discord.salons plus haut.
+  quiz_salon: "predictions"
+  # 0 = tout le Pokedex (1025 especes, redoutable). 1 a 9 = une seule
+  # generation. La 1 (les 151 premiers) est celle que tout le monde connait.
+  quiz_generation: 0
+
 
 # ─── Matieres ───────────────────────────────────────────────────────────────
 #
