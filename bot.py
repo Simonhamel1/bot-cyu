@@ -2244,13 +2244,13 @@ class ModaleSondage(discord.ui.Modal, title="Un sondage"):
             options=[discord.SelectOption(label=nom, value=str(h),
                                           default=h == config.SONDAGE_DUREE_HEURES)
                      for nom, h in sd.DUREES],
-            min_values=0, max_values=1))
+            min_values=0, max_values=1, required=False))
     plusieurs = discord.ui.Label(
         text="Plusieurs réponses par personne ?",
         component=discord.ui.Select(
             options=[discord.SelectOption(label="Non, une seule", value="non", default=True),
                      discord.SelectOption(label="Oui, plusieurs", value="oui")],
-            min_values=0, max_values=1))
+            min_values=0, max_values=1, required=False))
 
     async def on_submit(self, inter: discord.Interaction):
         heures = int((self.duree.component.values or [str(config.SONDAGE_DUREE_HEURES)])[0])
@@ -2327,7 +2327,7 @@ class ModaleRappel(discord.ui.Modal, title="Un rappel"):
         component=discord.ui.Select(
             options=[discord.SelectOption(label="Moi seulement", value="moi", default=True),
                      discord.SelectOption(label="Tout le salon (@here)", value="here")],
-            min_values=0, max_values=1))
+            min_values=0, max_values=1, required=False))
 
     async def on_submit(self, inter: discord.Interaction):
         await poser_rappel(inter, str(self.quand.component.value),
@@ -2890,7 +2890,7 @@ class ModaleDevoir(discord.ui.Modal, title="Nouveau devoir"):
             options=[discord.SelectOption(label=l, value=v, description=d, emoji=e,
                                           default=v == "devoir")
                      for l, v, d, e in TYPES_DEVOIR],
-            min_values=0, max_values=1))
+            min_values=0, max_values=1, required=False))
     note = discord.ui.Label(
         text="Détails", description="facultatif",
         component=discord.ui.TextInput(style=discord.TextStyle.paragraph,
