@@ -269,6 +269,11 @@ CATEGORIE_ID = _txt(_discord, "categorie_id")
 SERVEUR_ID = _txt(_discord, "serveur_id")
 MENTION = _txt(_discord, "mention")
 MENTIONS_ACTIVES = _bool(_discord, "mentions_actives", True)
+# Le seul a pouvoir retirer un devoir. Vide = celui de `mention` s'il designe
+# une personne (<@123…>, pas un role) ; rien du tout = tout le monde peut.
+_proprio = _txt(_discord, "proprietaire_id") or re.sub(
+    r"^<@!?(\d+)>$", r"\1", MENTION.strip())
+PROPRIETAIRE_ID = int(_proprio) if _proprio.isdigit() else None
 WEBHOOK_SECOURS = _txt(_discord, "webhook_secours")
 
 # L'ordre compte : c'est celui de la creation des salons et de l'affichage

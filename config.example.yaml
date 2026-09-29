@@ -62,6 +62,11 @@ discord:
   mention: ""
   mentions_actives: true
 
+  # Le seul a pouvoir retirer un devoir (/supprimer, le menu de /devoirs) :
+  # ton identifiant Discord (clic droit sur toi > Copier l'identifiant).
+  # Vide = celui de `mention` ci-dessus ; les deux vides = tout le monde peut.
+  proprietaire_id: ""
+
   # Filet de securite : tout salon laisse vide ci-dessous atterrit ici.
   # Une URL de webhook marche sans bot et sans aucune permission.
   webhook_secours: ""

@@ -755,7 +755,7 @@ async def vue_devoirs(page=0):
     elements = [(_texte_devoir(d), _b("Fait", "dev", "fait", d["id"], style="vert",
                                       emoji="✅")) for d in tranche]
     corps = ui.sections(elements, fabrique_bouton=BoutonCyu)
-    menu = ui.Menu("devsel", "Supprimer un devoir…",
+    menu = ui.Menu("devsel", "Supprimer un devoir… (propriétaire seulement)",
                    [(f"#{d['id']} {d['titre']}"[:100], str(d["id"]),
                      (f"{d.get('matiere') or ''} {_quand_devoir(d)[0]}"
                       .replace("*", "").strip() or None), "🗑️")
@@ -779,6 +779,17 @@ async def vue_devoirs_photo():
     return carte("Devoirs", [], "devoir",
                  sous_titre=f"{len(restants)} en attente", image=fichier,
                  boutons=boutons), [fichier]
+
+
+REFUS_SUPPRESSION = "🔒 Seul le propriétaire du bot peut supprimer un devoir."
+
+
+def _peut_supprimer_devoir(inter):
+    """Retirer un devoir est reserve a config.PROPRIETAIRE_ID (tout le monde
+    s'il n'y en a pas). Sans interaction (tests), personne."""
+    if inter is None:
+        return False
+    return config.PROPRIETAIRE_ID is None or inter.user.id == config.PROPRIETAIRE_ID
 
 
 def _choix_devoirs(saisie):
@@ -3240,7 +3251,10 @@ async def _vue_navigation(action, args, valeurs, inter=None):
             await asyncio.to_thread(dv.marquer_fait, args[1])
             return await vue_devoirs(0)
         if quoi == "suppr":
-            await asyncio.to_thread(dv.supprimer, args[1])
+            if _peut_supprimer_devoir(inter):
+                await asyncio.to_thread(dv.supprimer, args[1])
+            elif inter is not None:
+                await inter.followup.send(REFUS_SUPPRESSION, ephemeral=True)
             return await vue_devoirs(0)
         if quoi == "photo":
             return await vue_devoirs_photo()
@@ -3251,6 +3265,10 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         return await vue_devoirs(int(page) if page.lstrip("-").isdigit() else 0)
     if action == "devsel":
         quoi = args[0] if args else "suppr"
+        if quoi == "suppr" and not _peut_supprimer_devoir(inter):
+            if inter is not None:
+                await inter.followup.send(REFUS_SUPPRESSION, ephemeral=True)
+            return await vue_devoirs(0)
         for ident in valeurs:
             await asyncio.to_thread(dv.supprimer if quoi == "suppr" else dv.marquer_fait,
                                     ident)
@@ -3375,6 +3393,10 @@ async def cmd_fait(inter: discord.Interaction, devoir: int):
 @bot.tree.command(name="supprimer", description="Retirer un devoir de la liste")
 @app_commands.describe(devoir="le devoir — la liste s'affiche pendant la frappe")
 async def cmd_supprimer(inter: discord.Interaction, devoir: int):
+    if not _peut_supprimer_devoir(inter):
+        await inter.response.send_message(view=ui.erreur(REFUS_SUPPRESSION, "Réservé"),
+                                          ephemeral=True)
+        return
     d = await asyncio.to_thread(dv.supprimer, devoir)
     if d is None:
         await inter.response.send_message(view=ui.erreur(f"Aucun devoir #{devoir}."),
