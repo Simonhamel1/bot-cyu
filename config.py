@@ -269,8 +269,9 @@ CATEGORIE_ID = _txt(_discord, "categorie_id")
 SERVEUR_ID = _txt(_discord, "serveur_id")
 MENTION = _txt(_discord, "mention")
 MENTIONS_ACTIVES = _bool(_discord, "mentions_actives", True)
-# Le seul a pouvoir retirer un devoir. Vide = celui de `mention` s'il designe
-# une personne (<@123…>, pas un role) ; rien du tout = tout le monde peut.
+# Le seul a pouvoir vider un salon (/clear). Vide = celui de `mention` s'il
+# designe une personne (<@123…>, pas un role) ; rien du tout = quiconque a le
+# droit « gerer les messages » dans le salon.
 _proprio = _txt(_discord, "proprietaire_id") or re.sub(
     r"^<@!?(\d+)>$", r"\1", MENTION.strip())
 PROPRIETAIRE_ID = int(_proprio) if _proprio.isdigit() else None

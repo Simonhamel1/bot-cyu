@@ -62,9 +62,9 @@ discord:
   mention: ""
   mentions_actives: true
 
-  # Le seul a pouvoir retirer un devoir (/supprimer, le menu de /devoirs) :
-  # ton identifiant Discord (clic droit sur toi > Copier l'identifiant).
-  # Vide = celui de `mention` ci-dessus ; les deux vides = tout le monde peut.
+  # Le seul a pouvoir vider un salon avec /clear : ton identifiant Discord
+  # (clic droit sur toi > Copier l'identifiant). Vide = celui de `mention`
+  # ci-dessus ; les deux vides = quiconque a « gerer les messages » dans le salon.
   proprietaire_id: ""
 
   # Filet de securite : tout salon laisse vide ci-dessous atterrit ici.
