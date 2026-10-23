@@ -33,9 +33,12 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import celcat
+import affichage
 import config
-import vue
+import ecole
+import edt
+import promo
+
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -466,8 +469,7 @@ def _marge_pluie(depart, arrivee=None):
     if not (config.METEO_ACTIVE and config.METEO_BRIEFING) or depart is None:
         return 0
     try:
-        import meteo as meteo_
-        return meteo_.trajet(depart, arrivee)[1]
+        return edt.trajet(depart, arrivee)[1]
     except Exception as e:     # large a dessein : une meteo ratee, ce n'est
         print(f"[!] marge meteo ignoree : {e}", flush=True)   # pas une image ratee
         return 0
@@ -482,17 +484,13 @@ def _bande_meteo(toile, y, largeur, jour_, depart=None, arrivee=None):
     """
     if not (config.METEO_ACTIVE and config.METEO_BRIEFING):
         return y
-    try:
-        import meteo as meteo_
-    except ImportError:
-        return y
 
-    data = meteo_.bulletin()
+    data = edt.bulletin()
     if not data:
         return y
-    resume = meteo_.jour(jour_, data)
-    creneaux = meteo_.fenetre(depart, arrivee or depart, data) if depart else []
-    gene = meteo_.pire(creneaux)
+    resume = edt.jour(jour_, data)
+    creneaux = edt.fenetre(depart, arrivee or depart, data) if depart else []
+    gene = edt.pire(creneaux)
     if resume is None and gene is None:
         return y
 
@@ -511,7 +509,7 @@ def _bande_meteo(toile, y, largeur, jour_, depart=None, arrivee=None):
                     largeur_max=largeur - x - MARGE - 20)
     if gene is not None:
         ligne = f"Au départ de {depart:%H:%M} : {gene.detail()}"
-        phrase = meteo_.conseil(creneaux)
+        phrase = edt.conseil(creneaux)
         if phrase:
             ligne += f" — {phrase}"
         toile.texte(x, y + (36 if resume is not None else 18), ligne, 13.5, False,
@@ -526,8 +524,8 @@ def _bornes(cours_visibles):
 
     Les bornes de config.yaml sont un minimum, pas un maximum : un examen a
     7 h ou un TP qui finit a 20 h doit rester dans le cadre."""
-    h0 = vue.hhmm(config.JOURNEE_DEBUT, (8, 0))[0]
-    h1 = vue.hhmm(config.JOURNEE_FIN, (19, 0))[0]
+    h0 = affichage.hhmm(config.JOURNEE_DEBUT, (8, 0))[0]
+    h1 = affichage.hhmm(config.JOURNEE_FIN, (19, 0))[0]
     for c in cours_visibles:
         h0 = min(h0, c.debut.hour)
         if c.fin:
@@ -560,7 +558,7 @@ def _jours_a_montrer(cours, lundi, debut, fin):
         j = lundi + timedelta(days=i)
         if j < debut or j > fin:
             continue
-        if i >= 5 and not celcat.du_jour(cours, j):
+        if i >= 5 and not edt.du_jour(cours, j):
             continue
         jours.append(j)
     return jours
@@ -608,8 +606,8 @@ def _dessiner_semaine(toile, y0, cours, jours, h0, h1, maintenant=None):
 
     hauteurs = []
     for j in jours:
-        hauteurs.append(HAUTEUR_JOUR * max(1, len(_sous_lignes(celcat.du_jour(cours, j))))
-                        if celcat.du_jour(cours, j) else HAUTEUR_JOUR_VIDE)
+        hauteurs.append(HAUTEUR_JOUR * max(1, len(_sous_lignes(edt.du_jour(cours, j))))
+                        if edt.du_jour(cours, j) else HAUTEUR_JOUR_VIDE)
     hauteur_totale = ENTETE_HEURES + sum(h + ESPACE_LIGNE for h in hauteurs)
 
     toile.rect([MARGE, y0, x_fin + 10, y0 + hauteur_totale + 6], fond=CARTE, rayon=RAYON)
@@ -628,7 +626,7 @@ def _dessiner_semaine(toile, y0, cours, jours, h0, h1, maintenant=None):
     aujourd = maintenant.date()
     y = y0 + ENTETE_HEURES
     for jour, hauteur in zip(jours, hauteurs):
-        jc = celcat.du_jour(cours, jour)
+        jc = edt.du_jour(cours, jour)
         est_auj = jour == aujourd
 
         if est_auj:
@@ -636,17 +634,17 @@ def _dessiner_semaine(toile, y0, cours, jours, h0, h1, maintenant=None):
                        fond=_melanger(CARTE, ACCENT, 0.16), rayon=10)
 
         # La colonne des jours, a gauche.
-        etiquette = vue.JOURS_COURTS[jour.weekday()].capitalize()
+        etiquette = affichage.JOURS_COURTS[jour.weekday()].capitalize()
         toile.texte(MARGE + 14, y + 6, etiquette, 15, True,
                     ACCENT if est_auj else TEXTE)
         toile.texte(MARGE + 14, y + 25, f"{jour:%d/%m}", 12.5, False,
                     TEXTE_MOYEN if est_auj else TEXTE_FAIBLE)
         if jc:
             total = sum(c.minutes for c in jc)
-            toile.texte(MARGE + 14, y + 43, vue.duree_fr(total), 11.5, False, TEXTE_FAIBLE)
+            toile.texte(MARGE + 14, y + 43, affichage.duree_fr(total), 11.5, False, TEXTE_FAIBLE)
 
         if not jc:
-            autres = celcat.non_cours_du_jour(cours, jour)
+            autres = edt.non_cours_du_jour(cours, jour)
             mot = autres[0].titre if autres else "libre"
             toile.texte(x_lane + 12, y + 12, mot.lower(), 13, False, TEXTE_FAIBLE)
         else:
@@ -689,7 +687,7 @@ def rendre(cours, debut=None, fin=None, chemin=None, titre=None, maintenant=None
     h0, h1 = _bornes(concernes)
 
     semaines = []
-    lundi = celcat.semaine_de(debut)
+    lundi = edt.semaine_de(debut)
     while lundi <= fin:
         jours = _jours_a_montrer(cours, lundi, debut, fin)
         if jours:
@@ -703,10 +701,10 @@ def rendre(cours, debut=None, fin=None, chemin=None, titre=None, maintenant=None
         for _, jours in semaines) + 120
 
     toile = Toile(largeur, max(hauteur_max, 300))
-    entete = titre or (f"Emploi du temps — {vue.jour_fr(debut, court=True)} "
-                       f"au {vue.jour_fr(fin, court=True)}")
+    entete = titre or (f"Emploi du temps — {affichage.jour_fr(debut, court=True)} "
+                       f"au {affichage.jour_fr(fin, court=True)}")
     total = sum(c.minutes for c in concernes)
-    sous = (f"{len(concernes)} cours · {vue.duree_fr(total)}"
+    sous = (f"{len(concernes)} cours · {affichage.duree_fr(total)}"
             if concernes else "aucun cours sur cette période")
     y = _entete(toile, entete, sous)
 
@@ -716,9 +714,9 @@ def rendre(cours, debut=None, fin=None, chemin=None, titre=None, maintenant=None
             y += 20
         # Une semaine sans le moindre cours tient en une bande : cinq lignes
         # « libre » prendraient un tiers de l'image pour ne rien dire.
-        if not any(celcat.du_jour(cours, j) for j in jours):
+        if not any(edt.du_jour(cours, j) for j in jours):
             toile.rect([MARGE, y, largeur - MARGE, y + 46], fond=CARTE, rayon=12)
-            feries = [c.titre for j in jours for c in celcat.non_cours_du_jour(cours, j)]
+            feries = [c.titre for j in jours for c in edt.non_cours_du_jour(cours, j)]
             toile.texte(MARGE + 18, y + 14,
                         feries[0] if feries else "Aucun cours publié sur cette semaine",
                         14, False, TEXTE_FAIBLE)
@@ -739,7 +737,7 @@ def rendre(cours, debut=None, fin=None, chemin=None, titre=None, maintenant=None
 
 def rendre_semaine(cours, lundi=None, chemin=None):
     """Raccourci : la semaine qui contient `lundi` (celle en cours par defaut)."""
-    lundi = lundi or celcat.semaine_de(date.today())
+    lundi = lundi or edt.semaine_de(date.today())
     return rendre(cours, lundi, lundi + timedelta(days=6), chemin,
                   titre=f"Semaine du {lundi:%d/%m}")
 
@@ -755,21 +753,20 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
     colonne, les cours empiles a la verticale, et ce qui manque au texte —
     l'etat d'avancement, les trous, l'heure de lever.
     """
-    import devoirs as dv
 
     jour = jour or date.today()
     maintenant = maintenant or datetime.now()
-    jc = celcat.du_jour(cours, jour)
-    liste_devoirs = liste_devoirs if liste_devoirs is not None else dv.lire()
+    jc = edt.du_jour(cours, jour)
+    liste_devoirs = liste_devoirs if liste_devoirs is not None else promo.lire_devoirs()
 
     toile = Toile(LARGEUR_JOURNEE, 400 + 150 * max(len(jc), 1) + 200)
-    titre = vue.jour_fr(jour).capitalize()
-    relatif = vue.jour_relatif(jour, maintenant.date())
+    titre = affichage.jour_fr(jour).capitalize()
+    relatif = affichage.jour_relatif(jour, maintenant.date())
     if relatif != titre.lower():
-        titre = f"{relatif.capitalize()} — {vue.jour_fr(jour)}"
+        titre = f"{relatif.capitalize()} — {affichage.jour_fr(jour)}"
 
     if not jc:
-        autres = celcat.non_cours_du_jour(cours, jour)
+        autres = edt.non_cours_du_jour(cours, jour)
         motif = autres[0].titre if autres else ""
         y = _entete(toile, titre, motif or "aucun cours", VERT)
         toile.rect([MARGE, y, LARGEUR_JOURNEE - MARGE, y + 88], fond=CARTE, rayon=RAYON)
@@ -783,15 +780,15 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
     fin_journee = jc[-1].fin or jc[-1].debut
     amplitude = (fin_journee - jc[0].debut).total_seconds() / 60
     sous = (f"{jc[0].debut:%H:%M} → {fin_journee:%H:%M} · {len(jc)} cours · "
-            f"{vue.duree_fr(total)} de cours")
+            f"{affichage.duree_fr(total)} de cours")
     if amplitude - total >= config.TROU_MINUTES:
-        sous += f" sur {vue.duree_fr(amplitude)} de présence"
+        sous += f" sur {affichage.duree_fr(amplitude)} de présence"
     y = _entete(toile, titre, sous)
 
     # L'heure de lever, en haut : c'est l'information qu'on cherche le soir.
     depart = None
     if jour >= maintenant.date():
-        lever, depart = vue.heure_lever(jc[0])
+        lever, depart = affichage.heure_lever(jc[0])
         # La pluie recule l'heure de depart : c'est la seule chose que la meteo
         # a le droit de changer, et elle ne la change que quand il pleut.
         marge = 0
@@ -820,7 +817,7 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
             creux = (c.debut - precedent.fin).total_seconds() / 60
             if creux >= config.TROU_MINUTES:
                 toile.texte(MARGE + 96, y + 2,
-                            f"⋯   {vue.duree_fr(creux)} de trou   "
+                            f"⋯   {affichage.duree_fr(creux)} de trou   "
                             f"({precedent.fin:%H:%M} → {c.debut:%H:%M})",
                             12.5, False, TEXTE_FAIBLE)
                 y += 26
@@ -829,7 +826,7 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
         fini = jour < maintenant.date() or (c.fin and maintenant >= c.fin
                                             and jour == maintenant.date())
         encours = jour == maintenant.date() and c.debut <= maintenant < (c.fin or c.debut)
-        liees = dv.du_cours(c, liste_devoirs)
+        liees = promo.du_cours(c, liste_devoirs)
         hauteur = 76 + (22 if c.prof else 0) + 22 * len(liees)
 
         couleur_carte = CARTE if not encours else _melanger(CARTE, fond, 0.22)
@@ -843,7 +840,7 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
         toile.texte(MARGE + 24, y + 14, f"{c.debut:%H:%M}", 20, True, couleur_titre)
         if c.fin:
             toile.texte(MARGE + 24, y + 40, f"{c.fin:%H:%M}", 14, False, TEXTE_FAIBLE)
-            toile.texte(MARGE + 24, y + 60, vue.duree_fr(c.minutes), 11.5, False,
+            toile.texte(MARGE + 24, y + 60, affichage.duree_fr(c.minutes), 11.5, False,
                         TEXTE_FAIBLE)
 
         x = MARGE + 108
@@ -854,14 +851,14 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
         etat_x = LARGEUR_JOURNEE - MARGE - 16
         if encours:
             reste = (c.fin - maintenant).total_seconds() / 60 if c.fin else 0
-            mot = f"▶  en cours · reste {vue.duree_fr(reste)}"
+            mot = f"▶  en cours · reste {affichage.duree_fr(reste)}"
             l = toile.largeur_texte(mot, 12, True) + 14
             toile.pastille(etat_x - l, y + 12, mot, VERT, taille=12)
         elif fini:
             l = toile.largeur_texte("terminé", 12, True) + 14
             toile.pastille(etat_x - l, y + 12, "terminé", TRAIT_FORT, TEXTE_FAIBLE, 12)
         elif jour == maintenant.date():
-            mot = vue.compte_a_rebours(c.debut, maintenant)
+            mot = affichage.compte_a_rebours(c.debut, maintenant)
             l = toile.largeur_texte(mot, 12, True) + 14
             toile.pastille(etat_x - l, y + 12, mot, CARTE_HAUTE, TEXTE_MOYEN, 12)
 
@@ -894,10 +891,9 @@ def rendre_jour(cours, liste_devoirs=None, jour=None, chemin=None, maintenant=No
 
 def _bloc_devoirs_carte(toile, y, liste_devoirs, jour):
     """Le rappel des devoirs sous une journee : seulement ce qui presse."""
-    import devoirs as dv
 
-    restants = [d for d in dv.actifs(liste_devoirs)
-                if (r := dv.jours_restants(d)) is None or r <= 7]
+    restants = [d for d in promo.actifs(liste_devoirs)
+                if (r := promo.jours_restants(d)) is None or r <= 7]
     if not restants:
         return y
     hauteur = 44 + 26 * min(len(restants), 5)
@@ -905,7 +901,7 @@ def _bloc_devoirs_carte(toile, y, liste_devoirs, jour):
     toile.texte(MARGE + 18, y + 13, "À rendre sous 7 jours", 14.5, True, TEXTE)
     yy = y + 40
     for d in restants[:5]:
-        reste = dv.jours_restants(d)
+        reste = promo.jours_restants(d)
         if reste is None:
             quand, couleur = "sans échéance", TEXTE_FAIBLE
         elif reste < 0:
@@ -942,31 +938,30 @@ def rendre_changements(liste, chemin=None, titre=None, sous_titre=""):
 
     C'est la ou le texte Discord echouait le plus : deux creneaux et une
     fleche, ca demande des colonnes."""
-    import changements as chg
 
     liste = list(liste)
     toile = Toile(LARGEUR_CARTE, 220 + 96 * max(len(liste), 1) + 140)
-    presses = chg.urgents(liste)
+    presses = edt.urgents(liste)
     accent = ROUGE if presses else (ORANGE if any(
-        c.type in chg.GRAVES for c in liste) else ACCENT)
+        c.type in edt.GRAVES for c in liste) else ACCENT)
 
-    y = _entete(toile, titre or chg.titre(liste),
+    y = _entete(toile, titre or edt.titre(liste),
                 sous_titre or f"{len(liste)} changement"
-                              f"{'s' if len(liste) > 1 else ''} détecté"
-                              f"{'s' if len(liste) > 1 else ''}", accent)
+                f"{'s' if len(liste) > 1 else ''} détecté"
+                f"{'s' if len(liste) > 1 else ''}", accent)
 
     if presses:
         toile.rect([MARGE, y, LARGEUR_CARTE - MARGE, y + 40], fond=_melanger(CARTE, ROUGE, 0.3),
                    rayon=10)
         jours = sorted({j for ch in presses for j in ch.jours})
-        libelle = " et ".join(vue.jour_relatif(j) for j in jours[:2])
+        libelle = " et ".join(affichage.jour_relatif(j) for j in jours[:2])
         toile.texte(MARGE + 16, y + 11, f"⚠   Ça touche {libelle}.", 15, True, TEXTE)
         y += 52
 
     for ch in liste[:14]:
         c = ch.cours
         couleur = COULEUR_CHANGEMENT.get(ch.type, ACCENT)
-        _, mot = chg.ENTETES[ch.type]
+        _, mot = edt.ENTETES[ch.type]
         hauteur = 86
         toile.rect([MARGE, y, LARGEUR_CARTE - MARGE, y + hauteur], fond=CARTE, rayon=12)
         toile.rect([MARGE, y, MARGE + 6, y + hauteur], fond=couleur, rayon=3)
@@ -979,15 +974,15 @@ def rendre_changements(liste, chemin=None, titre=None, sous_titre=""):
         avant, apres = ch.avant, ch.apres
         y2 = y + 44
         if ch.type == "annule":
-            toile.texte(x, y2, f"{vue.jour_fr(avant.jour, court=True)}   "
-                               f"{avant.creneau}   ·   {avant.ou}", 14, True,
+            toile.texte(x, y2, f"{affichage.jour_fr(avant.jour, court=True)}   "
+                        f"{avant.creneau}   ·   {avant.ou}", 14, True,
                         _melanger(TEXTE, CARTE, 0.4))
             toile.ligne([x, y2 + 9, x + toile.largeur_texte(
-                f"{vue.jour_fr(avant.jour, court=True)}   {avant.creneau}   ·   {avant.ou}",
+                f"{affichage.jour_fr(avant.jour, court=True)}   {avant.creneau}   ·   {avant.ou}",
                 14, True), y2 + 9], TEXTE_FAIBLE, 1.5)
         elif ch.type == "ajoute":
-            toile.texte(x, y2, f"{vue.jour_fr(apres.jour, court=True)}   "
-                               f"{apres.creneau}   ·   {apres.ou}", 14, True, TEXTE)
+            toile.texte(x, y2, f"{affichage.jour_fr(apres.jour, court=True)}   "
+                        f"{apres.creneau}   ·   {apres.ou}", 14, True, TEXTE)
         else:
             gauche, droite = _cotes_changement(ch)
             largeur_gauche = toile.largeur_texte(gauche, 14, False)
@@ -998,7 +993,7 @@ def rendre_changements(liste, chemin=None, titre=None, sous_titre=""):
 
         quand = apres or avant
         toile.texte(LARGEUR_CARTE - MARGE - 18, y + 15,
-                    vue.jour_relatif(quand.jour), 12.5, True, TEXTE_FAIBLE,
+                    affichage.jour_relatif(quand.jour), 12.5, True, TEXTE_FAIBLE,
                     aligne="droite")
         y += hauteur + 10
 
@@ -1019,19 +1014,19 @@ def _cotes_changement(ch):
     """(avant, apres) en texte court, pour la ligne « ➜ » de la carte."""
     a, b = ch.avant, ch.apres
     if ch.type == "deplace_jour":
-        return (f"{vue.jour_fr(a.jour, court=True)}  {a.creneau}",
-                f"{vue.jour_fr(b.jour, court=True)}  {b.creneau} · {b.ou}")
+        return (f"{affichage.jour_fr(a.jour, court=True)}  {a.creneau}",
+                f"{affichage.jour_fr(b.jour, court=True)}  {b.creneau} · {b.ou}")
     if ch.type == "deplace_heure":
         minutes = (b.debut - a.debut).total_seconds() / 60
         signe = "+" if minutes > 0 else "−"
-        return (f"{vue.jour_fr(a.jour, court=True)}  {a.creneau}",
-                f"{b.creneau}  ({signe}{vue.duree_fr(minutes)}) · {b.ou}")
+        return (f"{affichage.jour_fr(a.jour, court=True)}  {a.creneau}",
+                f"{b.creneau}  ({signe}{affichage.duree_fr(minutes)}) · {b.ou}")
     if ch.type == "salle":
-        return (f"{vue.jour_fr(a.jour, court=True)} {a.creneau} · {a.ou or 'salle inconnue'}",
+        return (f"{affichage.jour_fr(a.jour, court=True)} {a.creneau} · {a.ou or 'salle inconnue'}",
                 f"{b.ou}")
     if ch.type == "duree":
-        return (f"{a.creneau} ({vue.duree_fr(a.minutes)})",
-                f"{b.creneau} ({vue.duree_fr(b.minutes)})")
+        return (f"{a.creneau} ({affichage.duree_fr(a.minutes)})",
+                f"{b.creneau} ({affichage.duree_fr(b.minutes)})")
     if ch.type == "prof":
         return (a.prof.title() or "inconnu", b.prof.title() or "inconnu")
     return (a.creneau if a else "", b.creneau if b else "")
@@ -1040,10 +1035,9 @@ def _cotes_changement(ch):
 # --- L'image des devoirs -----------------------------------------------------
 def rendre_devoirs(liste_devoirs=None, chemin=None):
     """Le carnet de devoirs, trie par urgence, avec une barre de couleur."""
-    import devoirs as dv
 
-    liste_devoirs = liste_devoirs if liste_devoirs is not None else dv.lire()
-    restants = dv.actifs(liste_devoirs)
+    liste_devoirs = liste_devoirs if liste_devoirs is not None else promo.lire_devoirs()
+    restants = promo.actifs(liste_devoirs)
     toile = Toile(LARGEUR_CARTE, 200 + 92 * max(len(restants), 1) + 120)
 
     faits = [d for d in liste_devoirs if d.get("fait")]
@@ -1060,8 +1054,8 @@ def rendre_devoirs(liste_devoirs=None, chemin=None):
                            _pied(toile, y + 100))
 
     for d in restants[:12]:
-        reste = dv.jours_restants(d)
-        ech = dv.echeance_dt(d)
+        reste = promo.jours_restants(d)
+        ech = promo.echeance_dt(d)
         if reste is None:
             couleur, quand = TEXTE_FAIBLE, "sans échéance"
         elif reste < 0:
@@ -1091,7 +1085,7 @@ def rendre_devoirs(liste_devoirs=None, chemin=None):
         if d.get("matiere"):
             bas.append(d["matiere"])
         if ech is not None:
-            bas.append(vue.jour_fr(ech.date())
+            bas.append(affichage.jour_fr(ech.date())
                        + (f" à {ech:%H:%M}" if ech.strftime("%H:%M") not in
                           ("23:59", "00:00") else ""))
         if d.get("type") and d["type"] != "devoir":
@@ -1113,11 +1107,10 @@ def rendre_devoirs(liste_devoirs=None, chemin=None):
 # --- L'image du prochain cours -----------------------------------------------
 def rendre_prochain(cours, liste_devoirs=None, chemin=None, maintenant=None):
     """Le prochain cours en grand, plus ce qui suit dans la journee."""
-    import devoirs as dv
 
     maintenant = maintenant or datetime.now()
-    actuel = celcat.en_cours(cours, maintenant)
-    suivant = celcat.prochain(cours, maintenant)
+    actuel = edt.en_cours(cours, maintenant)
+    suivant = edt.prochain(cours, maintenant)
     toile = Toile(LARGEUR_CARTE, 720)
 
     if not actuel and not suivant:
@@ -1131,7 +1124,7 @@ def rendre_prochain(cours, liste_devoirs=None, chemin=None, maintenant=None):
     vedette = actuel or suivant
     couleur = _couleur_cours(vedette)
     y = _entete(toile, "En ce moment" if actuel else "Prochain cours",
-                vue.jour_relatif(vedette.jour, maintenant.date()).capitalize()
+                affichage.jour_relatif(vedette.jour, maintenant.date()).capitalize()
                 + f" · {vedette.creneau}", couleur)
 
     hauteur = 150
@@ -1152,40 +1145,40 @@ def rendre_prochain(cours, liste_devoirs=None, chemin=None, maintenant=None):
     ligne_bas = []
     if vedette.prof:
         ligne_bas.append("avec " + vedette.prof.title())
-    ligne_bas.append(f"{vue.duree_fr(vedette.minutes)} de cours")
+    ligne_bas.append(f"{affichage.duree_fr(vedette.minutes)} de cours")
     toile.texte(x, y + 86, "     ".join(ligne_bas), 13.5, False, TEXTE_MOYEN,
                 largeur_max=LARGEUR_CARTE - 2 * MARGE - 60)
 
     if actuel and actuel.fin:
         reste = (actuel.fin - maintenant).total_seconds() / 60
-        info = f"fini dans {vue.duree_fr(reste)}"
+        info = f"fini dans {affichage.duree_fr(reste)}"
     else:
-        info = vue.compte_a_rebours(vedette.debut, maintenant)
+        info = affichage.compte_a_rebours(vedette.debut, maintenant)
     toile.texte(x, y + 112, info, 19, True, _eclaircir(couleur, 0.55))
     y += hauteur + 14
 
     # L'heure de partir : la seule chose qui change ce qu'on fait maintenant.
     if suivant and not actuel and not suivant.a_distance:
-        _, depart = vue.heure_lever(suivant)
+        _, depart = affichage.heure_lever(suivant)
         if depart > maintenant:
             toile.rect([MARGE, y, LARGEUR_CARTE - MARGE, y + 40], fond=CARTE_HAUTE,
                        rayon=10)
             toile.texte(MARGE + 16, y + 11,
                         f"Partir à {depart:%H:%M}  ·  "
-                        f"{vue.compte_a_rebours(depart, maintenant)}", 14.5, True, TEXTE)
+                        f"{affichage.compte_a_rebours(depart, maintenant)}", 14.5, True, TEXTE)
             y += 52
 
     if actuel and suivant:
         y = _carte_suite(toile, y, "Ensuite", [suivant], maintenant)
 
-    apres = [c for c in celcat.du_jour(cours, vedette.jour) if c.debut > vedette.debut]
+    apres = [c for c in edt.du_jour(cours, vedette.jour) if c.debut > vedette.debut]
     if actuel and suivant:
         apres = [c for c in apres if c.debut > suivant.debut]
     if apres:
-        y = _carte_suite(toile, y, f"La suite de {vue.jour_relatif(vedette.jour)}",
+        y = _carte_suite(toile, y, f"La suite de {affichage.jour_relatif(vedette.jour)}",
                          apres[:4], maintenant)
 
-    liees = dv.du_cours(vedette, liste_devoirs)
+    liees = promo.du_cours(vedette, liste_devoirs)
     if liees:
         hauteur = 40 + 24 * len(liees)
         toile.rect([MARGE, y, LARGEUR_CARTE - MARGE, y + hauteur], fond=CARTE, rayon=12)
@@ -1308,7 +1301,6 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
     pas. Trois etages, du plus resume au plus detaille : les tuiles de
     chiffres, la repartition par matiere, puis la charge jour par jour.
     """
-    import stats as st
 
     toile = Toile(LARGEUR_STATS,
                   400 + 44 * max(len(s.matieres), 1) + 44 * 7 + 220)
@@ -1322,30 +1314,30 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
                            _pied(toile, y + 110))
 
     # --- Etage 1 : les quatre chiffres qu'on retient ------------------------
-    ecart, origine = st.comparer(s, cours)
+    ecart, origine = edt.comparer_stats(s, cours)
     if ecart is None:
         detail_total, couleur_total = f"sur {s.jours_travailles} jours", TEXTE_MOYEN
     elif abs(ecart) < 15:
         detail_total, couleur_total = "comme la semaine passée", TEXTE_MOYEN
     else:
         fleche = "▲" if ecart > 0 else "▼"
-        detail_total = f"{fleche} {vue.duree_fr(abs(ecart))} vs S-1 ({origine})"
+        detail_total = f"{fleche} {affichage.duree_fr(abs(ecart))} vs S-1 ({origine})"
         couleur_total = ORANGE if ecart > 0 else VERT
 
     plein = s.jour_plein
     largeur_tuile = (LARGEUR_STATS - 2 * MARGE - 3 * 12) / 4
     tuiles = [
-        ("Total de cours", vue.duree_fr(s.total_minutes), detail_total, ACCENT,
+        ("Total de cours", affichage.duree_fr(s.total_minutes), detail_total, ACCENT,
          couleur_total),
-        ("Moyenne par jour", vue.duree_fr(s.moyenne_par_jour),
+        ("Moyenne par jour", affichage.duree_fr(s.moyenne_par_jour),
          f"{s.seances} séances au total", COULEURS["TD"], None),
-        ("Temps de trou", vue.duree_fr(s.trous_minutes) if s.trous_minutes else "aucun",
+        ("Temps de trou", affichage.duree_fr(s.trous_minutes) if s.trous_minutes else "aucun",
          f"{s.nb_trous} créneau{'x' if s.nb_trous > 1 else ''}" if s.nb_trous
          else "journées compactes",
          ORANGE if s.trous_minutes >= 240 else COULEURS["TP"], None),
         ("Jour le plus lourd",
-         vue.JOURS[plein.jour.weekday()].capitalize() if plein else "—",
-         f"{vue.duree_fr(plein.minutes)} · {plein.debut:%H:%M}→{plein.fin:%H:%M}"
+         affichage.JOURS[plein.jour.weekday()].capitalize() if plein else "—",
+         f"{affichage.duree_fr(plein.minutes)} · {plein.debut:%H:%M}→{plein.fin:%H:%M}"
          if plein else "", COULEURS["EXAMEN"] if plein and plein.minutes >= 480
          else COULEURS["CM"], None),
     ]
@@ -1369,7 +1361,7 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
         toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 40], fond=CARTE, rayon=10)
         toile.rect([MARGE, y, MARGE + 5, y + 40], fond=COULEURS["EXAMEN"], rayon=3)
         jours_examens = ", ".join(
-            f"{vue.JOURS_COURTS[c.jour.weekday()]}. {c.debut:%H:%M}"
+            f"{affichage.JOURS_COURTS[c.jour.weekday()]}. {c.debut:%H:%M}"
             for c in s.examens[:4])
         toile.texte(MARGE + 18, y + 11,
                     f"{len(s.examens)} examen{'s' if len(s.examens) > 1 else ''} "
@@ -1412,7 +1404,7 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
         segments = [(nom, p.par_type[nom]) for nom in ORDRE_TYPES if nom in p.par_type]
         segments += [(nom, m) for nom, m in p.par_type.items() if nom not in ORDRE_TYPES]
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18, segments, maxi)
-        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(p.minutes),
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, affichage.duree_fr(p.minutes),
                     13.5, True, TEXTE, aligne="droite")
         toile.texte(x_bar - 10, y + 5, f"{p.part_de(s.total_minutes):.0f} %", 11.5,
                     False, TEXTE_FAIBLE, aligne="droite")
@@ -1420,7 +1412,7 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
     if reste:
         minutes = sum(p.minutes for p in reste)
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18, [("autre", minutes)], maxi)
-        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(minutes), 13.5,
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, affichage.duree_fr(minutes), 13.5,
                     True, TEXTE_MOYEN, aligne="droite")
         y += 34
     y += 24
@@ -1445,7 +1437,7 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
 
     y = haut_zone
     for j in jours_montres:
-        etiquette = f"{vue.JOURS_COURTS[j.jour.weekday()]}. {j.jour:%d/%m}"
+        etiquette = f"{affichage.JOURS_COURTS[j.jour.weekday()]}. {j.jour:%d/%m}"
         toile.texte(x_label, y + 3, etiquette, 13.5, j.jour == date.today(),
                     TEXTE if not j.vide else TEXTE_FAIBLE)
         if j.vide:
@@ -1465,9 +1457,9 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
         segments += [(nom, m) for nom, m in j.par_type.items() if nom not in ORDRE_TYPES]
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18,
                        segments or [("autre", j.minutes)], maxi_jour)
-        detail = vue.duree_fr(j.minutes)
+        detail = affichage.duree_fr(j.minutes)
         if j.trous_minutes:
-            detail += f"  +{vue.duree_fr(j.trous_minutes)}"
+            detail += f"  +{affichage.duree_fr(j.trous_minutes)}"
         toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, detail, 13, True,
                     TEXTE, aligne="droite")
         y += 34
@@ -1485,11 +1477,11 @@ def rendre_stats(s, chemin=None, cours=None, avec_historique=True,
 
     note = ""
     if avec_historique:
-        passees = st.historique(5)
+        passees = edt.historique_stats(5)
         if len(passees) >= 2:
             moyenne = sum(m for _, m in passees) / len(passees)
             note = (f"moyenne des {len(passees)} dernières semaines connues : "
-                    f"{vue.duree_fr(moyenne)}")
+                    f"{affichage.duree_fr(moyenne)}")
     return toile.finir(chemin or (config.DONNEES / "stats.png"),
                        _pied(toile, y + 4, note))
 
@@ -1503,7 +1495,6 @@ def rendre_bilan(b, chemin=None, cours=None):
     Meme grammaire que rendre_stats() : tuiles, barres empilees par type,
     grille recessive. Un lecteur qui connait l'une lit l'autre.
     """
-    import stats as st
 
     toile = Toile(LARGEUR_STATS,
                   380 + 34 * max(len(b.matieres), 1) + 34 * max(len(b.semaines), 1) + 200)
@@ -1523,14 +1514,14 @@ def rendre_bilan(b, chemin=None, cours=None):
     plus_lourde = b.matieres[0]
     largeur_tuile = (LARGEUR_STATS - 2 * MARGE - 3 * 12) / 4
     tuiles = [
-        ("Total de cours", vue.duree_fr(b.total_minutes),
+        ("Total de cours", affichage.duree_fr(b.total_minutes),
          f"{b.seances} séances", ACCENT),
-        ("Par semaine", vue.duree_fr(b.moyenne_semaine),
-         f"la plus chargée : {vue.duree_fr(pleine[1])}" if pleine else "",
+        ("Par semaine", affichage.duree_fr(b.moyenne_semaine),
+         f"la plus chargée : {affichage.duree_fr(pleine[1])}" if pleine else "",
          COULEURS["TD"]),
         ("Matières", str(len(b.matieres)),
          f"la plus lourde : {plus_lourde.nom}"[:40], COULEURS["TP"]),
-        ("À distance", vue.duree_fr(b.distanciel_minutes) if b.distanciel_minutes else "aucun",
+        ("À distance", affichage.duree_fr(b.distanciel_minutes) if b.distanciel_minutes else "aucun",
          f"{b.part_distanciel:.0f} % du total" if b.distanciel_minutes else "tout en présentiel",
          COULEUR_DISTANCE),
     ]
@@ -1542,7 +1533,7 @@ def rendre_bilan(b, chemin=None, cours=None):
     if b.examens:
         toile.rect([MARGE, y, LARGEUR_STATS - MARGE, y + 40], fond=CARTE, rayon=10)
         toile.rect([MARGE, y, MARGE + 5, y + 40], fond=COULEURS["EXAMEN"], rayon=3)
-        quand = ", ".join(f"{vue.jour_fr(c.jour, court=True)}" for c in b.examens[:5])
+        quand = ", ".join(f"{affichage.jour_fr(c.jour, court=True)}" for c in b.examens[:5])
         toile.texte(MARGE + 18, y + 11,
                     f"{len(b.examens)} examen{'s' if len(b.examens) > 1 else ''} "
                     f"dans la période — {quand}", 14, True, TEXTE,
@@ -1552,7 +1543,7 @@ def rendre_bilan(b, chemin=None, cours=None):
     # --- Etage 2 : les heures par matiere, en part du total -----------------
     toile.texte(MARGE, y, "Heures par matière", 16, True, TEXTE)
     toile.texte(LARGEUR_STATS - MARGE, y + 3,
-                f"le pourcentage est la part du total de {vue.duree_fr(b.total_minutes)}",
+                f"le pourcentage est la part du total de {affichage.duree_fr(b.total_minutes)}",
                 11.5, False, TEXTE_FAIBLE, aligne="droite")
     y += 28
 
@@ -1578,7 +1569,7 @@ def rendre_bilan(b, chemin=None, cours=None):
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18, segments, maxi)
         toile.texte(x_bar - 10, y + 5, f"{p.part_de(b.total_minutes):.0f} %", 11.5,
                     False, TEXTE_FAIBLE, aligne="droite")
-        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(p.minutes),
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, affichage.duree_fr(p.minutes),
                     13.5, True, TEXTE, aligne="droite")
         y += 34
     if reste:
@@ -1586,7 +1577,7 @@ def rendre_bilan(b, chemin=None, cours=None):
         toile.texte(x_label, y + 3, f"{len(reste)} autres matières", 13.5, False,
                     TEXTE_FAIBLE, largeur_max=largeur_nom)
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18, [("autre", minutes)], maxi)
-        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, vue.duree_fr(minutes), 13.5,
+        toile.texte(LARGEUR_STATS - MARGE - 4, y + 4, affichage.duree_fr(minutes), 13.5,
                     True, TEXTE_MOYEN, aligne="droite")
         y += 34
     y += 24
@@ -1595,7 +1586,7 @@ def rendre_bilan(b, chemin=None, cours=None):
     toile.texte(MARGE, y, "Semaine par semaine", 16, True, TEXTE)
     y += 28
     maxi_semaine = max([m for _, m, _ in b.semaines] + [60])
-    cette = celcat.semaine_de(date.today())
+    cette = edt.semaine_de(date.today())
     x_fin = LARGEUR_STATS - MARGE - 190       # place pour « 30 h 15 · 12 séances »
     haut_zone = y
     for _ in b.semaines:
@@ -1612,13 +1603,13 @@ def rendre_bilan(b, chemin=None, cours=None):
             toile.texte(x_bar + 8, y + 5, "rien de prévu", 12, False, TEXTE_FAIBLE)
             y += 34
             continue
-        par_type = st.par_type_semaine(cours or [], lundi) if cours else {}
+        par_type = edt.par_type_semaine(cours or [], lundi) if cours else {}
         segments = [(nom, par_type[nom]) for nom in ORDRE_TYPES if nom in par_type]
         segments += [(nom, m) for nom, m in par_type.items() if nom not in ORDRE_TYPES]
         _barre_empilee(toile, x_bar, x_fin, y + 4, 18,
                        segments or [("autre", minutes)], maxi_semaine)
         toile.texte(LARGEUR_STATS - MARGE - 4, y + 4,
-                    f"{vue.duree_fr(minutes)}  ·  {seances} séance{'s' if seances > 1 else ''}",
+                    f"{affichage.duree_fr(minutes)}  ·  {seances} séance{'s' if seances > 1 else ''}",
                     13, True, TEXTE, aligne="droite")
         y += 34
     y += 18
@@ -1780,7 +1771,6 @@ def rendre_ects(m, numero=1, chemin=None):
     texte : sur un telephone, huit colonnes en Markdown deviennent illisibles
     des la premiere matiere au nom long.
     """
-    import maquette as mq
 
     s = m.semestre(numero)
     if s is None:
@@ -1800,16 +1790,16 @@ def rendre_ects(m, numero=1, chemin=None):
     entreprise = sum(e.ects for e in s.matieres if not e.heures and e.evalue)
     largeur_tuile = (LARGEUR_ECTS - 2 * MARGE - 3 * 12) / 4
     tuiles = [
-        ("Crédits du semestre", f"{mq.nombre_fr(s.ects)} ECTS",
+        ("Crédits du semestre", f"{ecole.nombre_fr(s.ects)} ECTS",
          "60 sur l'année, 30 par semestre", ACCENT, None),
-        ("Heures de cours", f"{mq.nombre_fr(s.heures)} h",
-         f"CM {mq.nombre_fr(s.cm)} · TD {mq.nombre_fr(s.td)} · TP {mq.nombre_fr(s.tp)}",
+        ("Heures de cours", f"{ecole.nombre_fr(s.heures)} h",
+         f"CM {ecole.nombre_fr(s.cm)} · TD {ecole.nombre_fr(s.td)} · TP {ecole.nombre_fr(s.tp)}",
          COULEURS["CM"], None),
         ("Examens terminaux", f"{len(terminaux)} matière"
          f"{'s' if len(terminaux) > 1 else ''}",
          f"{len(continu)} en contrôle continu" if continu
          else "tout se joue le jour J", COULEURS["EXAMEN"], None),
-        ("En entreprise", f"{mq.nombre_fr(entreprise)} ECTS" if entreprise else "—",
+        ("En entreprise", f"{ecole.nombre_fr(entreprise)} ECTS" if entreprise else "—",
          f"{round(100 * entreprise / s.ects)} % sans aucun cours"
          if entreprise and s.ects else "tout est en cours", COULEURS["TD"], None),
     ]
@@ -1853,19 +1843,18 @@ def rendre_ects_annee(m, chemin=None):
     mes 60 credits », et y remettre quarante lignes la rendrait identique a la
     vue d'un semestre, en deux fois plus long.
     """
-    import maquette as mq
 
     nb_ue = sum(len(s.ues) for s in m.semestres)
     toile = Toile(LARGEUR_ECTS, 260 + 74 * len(m.semestres) + 52 * nb_ue + 160)
     y = _entete(toile, "Maquette de l'année",
-                f"{m.entete} · {mq.nombre_fr(m.ects)} ECTS sur "
+                f"{m.entete} · {ecole.nombre_fr(m.ects)} ECTS sur "
                 f"{len(m.semestres)} semestres")
 
     maxi = max([u.ects for s in m.semestres for u in s.ues] or [1])
     for s in m.semestres:
         toile.texte(MARGE, y, s.nom.upper(), 13, True, TEXTE)
         toile.texte(LARGEUR_ECTS - MARGE, y,
-                    f"{mq.nombre_fr(s.ects)} ECTS · {mq.nombre_fr(s.heures)} h de cours",
+                    f"{ecole.nombre_fr(s.ects)} ECTS · {ecole.nombre_fr(s.heures)} h de cours",
                     13, True, TEXTE_MOYEN, aligne="droite")
         y += 24
         toile.ligne([MARGE, y, LARGEUR_ECTS - MARGE, y], TRAIT)
@@ -1880,13 +1869,13 @@ def rendre_ects_annee(m, chemin=None):
                         largeur_max=x_bar - MARGE - 80)
             toile.texte(MARGE + 58, y + 20, f"{len(ue.ecs)} matière"
                         f"{'s' if len(ue.ecs) > 1 else ''}"
-                        + (f" · {mq.nombre_fr(ue.heures)} h" if ue.heures
+                        + (f" · {ecole.nombre_fr(ue.heures)} h" if ue.heures
                            else " · en entreprise"), 11.5, False, TEXTE_FAIBLE)
             toile.rect([x_bar, y + 8, x_fin, y + 28], fond=CARTE, rayon=5)
             fin = x_bar + (x_fin - x_bar) * (ue.ects / maxi)
             toile.rect([x_bar, y + 8, max(fin, x_bar + 5), y + 28], fond=couleur,
                        rayon=5)
-            toile.texte(LARGEUR_ECTS - MARGE, y + 7, f"{mq.nombre_fr(ue.ects)} ECTS",
+            toile.texte(LARGEUR_ECTS - MARGE, y + 7, f"{ecole.nombre_fr(ue.ects)} ECTS",
                         14, True, TEXTE, aligne="droite")
             y += 44
         y += 20
@@ -1921,14 +1910,13 @@ def _couleur_alt(nature):
 
 def _legende_alt(toile, y, cal, debut=None, fin=None):
     """Les pastilles sous la grille, et seulement celles qu'on y voit."""
-    import alternance as alt
 
     presentes = cal.natures_presentes(debut, fin)
     if not presentes:
         return y
     x = MARGE
     for nature in presentes:
-        libelle = alt.NOMS.get(nature, nature)
+        libelle = ecole.NOMS.get(nature, nature)
         if x + toile.largeur_texte(libelle, 11, True) + 30 > toile.largeur - MARGE:
             x, y = MARGE, y + 26
         x += toile.pastille(x, y, libelle, _couleur_alt(nature)) + 7
@@ -1966,14 +1954,13 @@ def _grille_mois(toile, y, cal, an, mois, debut, fin, aujourd_hui):
     Le numero de semaine est garde dans la colonne de gauche : le calendrier
     de l'ecole en parle (« S 36 »), les profs aussi, et sans lui l'image ne
     permet pas de repondre a « c'est quelle semaine ? »."""
-    import alternance as alt
     import calendar as _cal
 
     colonne_s = 44
     larg = (toile.largeur - 2 * MARGE - colonne_s - 6 * 6) / 7
     haut = 46
 
-    toile.texte(MARGE, y, f"{alt.MOIS_FR[mois - 1].capitalize()} {an}", 17, True, TEXTE)
+    toile.texte(MARGE, y, f"{ecole.MOIS_FR[mois - 1].capitalize()} {an}", 17, True, TEXTE)
     y += 26
     x0 = MARGE + colonne_s
     for i, nom in enumerate(("L", "M", "M", "J", "V", "S", "D")):
@@ -2020,7 +2007,6 @@ def _lignes_periodes(toile, y, cal, debut, fin, aujourd_hui, maxi=12):
 
     C'est la partie que les gens relisent -- « les examens, c'est quand,
     exactement ? » -- donc elle est ecrite, pas seulement coloriee."""
-    import alternance as alt
 
     periodes = [p for p in cal.entre(debut, fin)
                 if p.nature not in ("weekend", "hors")][:maxi]
@@ -2035,20 +2021,20 @@ def _lignes_periodes(toile, y, cal, debut, fin, aujourd_hui, maxi=12):
             toile.rect([MARGE - 6, y - 4, toile.largeur - MARGE + 6, y + 36],
                        fond=CARTE, rayon=8)
         toile.rect([MARGE, y + 2, MARGE + 4, y + 30], fond=couleur, rayon=2)
-        toile.texte(MARGE + 16, y, alt.NOMS.get(p.nature, p.nature), 14, True,
+        toile.texte(MARGE + 16, y, ecole.NOMS.get(p.nature, p.nature), 14, True,
                     _eclaircir(couleur, 0.45))
-        toile.texte(MARGE + 16, y + 18, alt.intervalle_fr(p.debut, p.fin), 12.5,
+        toile.texte(MARGE + 16, y + 18, ecole.intervalle_fr(p.debut, p.fin), 12.5,
                     False, TEXTE_MOYEN, largeur_max=toile.largeur - 2 * MARGE - 220)
 
-        detail = alt.compte_fr(p.ouvres, "jour")
+        detail = ecole.compte_fr(p.ouvres, "jour")
         if p.nature in ("formation", "entreprise") and p.semaines > 1:
-            detail = f"{alt.compte_fr(p.semaines, 'semaine')} · {detail}"
+            detail = f"{ecole.compte_fr(p.semaines, 'semaine')} · {detail}"
         toile.texte(toile.largeur - MARGE, y + 1, detail, 13, True, TEXTE,
                     aligne="droite")
         if en_cours:
             note = "en cours"
         elif p.debut > aujourd_hui:
-            note = alt.duree_fr((p.debut - aujourd_hui).days)
+            note = ecole.duree_fr((p.debut - aujourd_hui).days)
         else:
             note = "passée"
         toile.texte(toile.largeur - MARGE, y + 19, note, 11.5, False,
@@ -2065,7 +2051,6 @@ def rendre_alternance(cal, debut, fin, chemin=None, titre=None, sous_titre="",
     faut zoomer : c'est rendre_alternance_annee() qui prend le relais, avec
     une forme faite pour ca.
     """
-    import alternance as alt
 
     aujourd_hui = aujourd_hui or date.today()
     mois = []
@@ -2076,7 +2061,7 @@ def rendre_alternance(cal, debut, fin, chemin=None, titre=None, sous_titre="",
                        curseur.month % 12 + 1, 1)
     mois = mois[:4]
 
-    resume = alt.bloc_resume(cal, aujourd_hui)
+    resume = ecole.bloc_resume(cal, aujourd_hui)
     resume = [_sans_fioritures(l) for l in resume]
     nb_periodes = len([p for p in cal.entre(debut, fin)
                        if p.nature not in ("weekend", "hors")][:12])
@@ -2084,7 +2069,7 @@ def rendre_alternance(cal, debut, fin, chemin=None, titre=None, sous_titre="",
                   220 + 24 * len(resume) + 360 * len(mois) + 42 * nb_periodes + 200)
 
     y = _entete(toile, titre or "Calendrier d'alternance",
-                sous_titre or f"{cal.annee} · {alt.intervalle_fr(debut, fin)}")
+                sous_titre or f"{cal.annee} · {ecole.intervalle_fr(debut, fin)}")
     y = _bandeau_alt(toile, y, resume)
     for an, m in mois:
         y = _grille_mois(toile, y, cal, an, m, debut, fin, aujourd_hui)
@@ -2123,7 +2108,6 @@ def rendre_alternance_annee(cal, chemin=None, aujourd_hui=None, debut=None,
     un mois. Une ligne par mois tient dans la largeur d'un ecran, et l'oeil
     suit une periode de gauche a droite sans rien faire.
     """
-    import alternance as alt
 
     aujourd_hui = aujourd_hui or date.today()
     debut = debut or cal.debut
@@ -2141,7 +2125,7 @@ def rendre_alternance_annee(cal, chemin=None, aujourd_hui=None, debut=None,
     colonne = 78
     case = (LARGEUR_ALT_ANNEE - 2 * MARGE - colonne - 30) / 31
     haut = 26
-    resume = [_sans_fioritures(l) for l in alt.bloc_resume(cal, aujourd_hui)]
+    resume = [_sans_fioritures(l) for l in ecole.bloc_resume(cal, aujourd_hui)]
     nb_periodes = len([p for p in cal.periodes
                        if p.nature not in ("weekend", "hors")][:12])
     toile = Toile(LARGEUR_ALT_ANNEE,
@@ -2149,7 +2133,7 @@ def rendre_alternance_annee(cal, chemin=None, aujourd_hui=None, debut=None,
 
     y = _entete(toile, "Calendrier d'alternance",
                 f"{cal.annee} · l'année entière · "
-                f"{alt.intervalle_fr(cal.debut, cal.fin, court=True)}")
+                f"{ecole.intervalle_fr(cal.debut, cal.fin, court=True)}")
     y = _bandeau_alt(toile, y, resume)
 
     # La regle des quantiemes, en haut : sans elle, compter les carres pour
@@ -2163,7 +2147,7 @@ def rendre_alternance_annee(cal, chemin=None, aujourd_hui=None, debut=None,
     import calendar as _cal
     for an, m in mois:
         toile.texte(MARGE, y + haut / 2 - 8,
-                    f"{alt.MOIS_COURTS[m - 1]} {str(an)[2:]}", 12, True, TEXTE_MOYEN)
+                    f"{ecole.MOIS_COURTS[m - 1]} {str(an)[2:]}", 12, True, TEXTE_MOYEN)
         for j in range(1, _cal.monthrange(an, m)[1] + 1):
             d = date(an, m, j)
             x = MARGE + colonne + (j - 1) * case
@@ -2198,7 +2182,6 @@ def _totaux_alt(toile, y, cal):
 
     C'est la reponse a « combien de temps je passe ou ? », qu'aucune grille
     de carres colories ne donne d'un coup d'oeil."""
-    import alternance as alt
 
     comptes = cal.comptes()
     natures = [n for n in ("formation", "entreprise", "examen", "rattrapage")
@@ -2210,7 +2193,7 @@ def _totaux_alt(toile, y, cal):
     for i, nature in enumerate(natures):
         jours = comptes[nature]
         _tuile(toile, MARGE + i * (largeur + 12), y, largeur, 92,
-               alt.NOMS.get(nature, nature), alt.compte_fr(jours, "jour"),
+               ecole.NOMS.get(nature, nature), ecole.compte_fr(jours, "jour"),
                f"{round(100 * jours / total)} % de l'année",
                accent=_couleur_alt(nature))
     return y + 92 + 18

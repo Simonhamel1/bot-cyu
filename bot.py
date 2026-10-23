@@ -83,28 +83,14 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-import actu
-import alternance as alt
-import anniversaires as an
+import affichage
 import assistant
-import celcat
 import config
-import changements as chg
-import devoirs as dv
-import evenements as ev
-import image as img
-import interface as ui
-import maquette as mq
-import meteo
-import notif
-import pokemon as pk
-import predictions as pr
-import rappels as rp
-import sondages as sd
-import stats
-import statut as st
-import stockage
-import vue
+import ecole
+import edt
+import image
+import promo
+
 
 # Le daemon tourne-t-il dans le meme processus que le bot ? Mets False si tu
 # preferes lancer `python assistant.py daemon` de ton cote.
@@ -150,7 +136,7 @@ AFFICHAGE_CHOIX = [
     app_commands.Choice(name="texte", value="texte"),
 ]
 
-DUREE_CHOIX = [app_commands.Choice(name=nom, value=h) for nom, h in sd.DUREES]
+DUREE_CHOIX = [app_commands.Choice(name=nom, value=h) for nom, h in promo.DUREES]
 
 QUI_CHOIX = [
     app_commands.Choice(name="moi seulement", value="moi"),
@@ -182,7 +168,7 @@ SUGGESTIONS = [
     ("les 7 prochains jours", "+7"),
     ("les 14 prochains jours", "+14"),
     ("le mois qui vient", "+28"),
-] + [(j, j) for j in vue.JOURS]
+] + [(j, j) for j in affichage.JOURS]
 
 RE_JOURS = re.compile(r"^\+?(\d{1,3})\s*j?$")
 
@@ -196,7 +182,7 @@ def periode(texte, cours=None):
     « /edt 12/10 », c'est vouloir voir le 12 octobre, pas trois semaines
     autour.
     """
-    brut = celcat.normaliser(texte)
+    brut = edt.normaliser(texte)
     auj = date.today()
 
     if not brut or brut in ("aujourd'hui", "aujourdhui", "auj", "ce jour", "today"):
@@ -209,11 +195,11 @@ def periode(texte, cours=None):
         return auj - timedelta(days=1), auj - timedelta(days=1), "jour"
 
     if "semaine prochaine" in brut or brut in ("prochaine semaine", "semaine+1", "s+1"):
-        lundi = celcat.semaine_de(auj) + timedelta(days=7)
+        lundi = edt.semaine_de(auj) + timedelta(days=7)
         return lundi, lundi + timedelta(days=6), "grille"
     if brut.startswith("semaine") or brut in ("cette semaine", "la semaine",
                                               "semaine en cours", "s"):
-        lundi = celcat.semaine_de(auj)
+        lundi = edt.semaine_de(auj)
         return lundi, lundi + timedelta(days=6), "grille"
     if brut in ("mois", "ce mois", "le mois", "mois prochain"):
         return auj, auj + timedelta(days=27), "grille"
@@ -223,7 +209,7 @@ def periode(texte, cours=None):
         jours = min(int(m.group(1)), GRILLE_MAX_JOURS)
         return auj, auj + timedelta(days=jours), ("jour" if jours == 0 else "grille")
 
-    jour = vue.lire_date(texte, cours or [], auj)
+    jour = affichage.lire_date(texte, cours or [], auj)
     return jour, jour, "jour"
 
 
@@ -237,7 +223,7 @@ async def _donnees():
     """Lecture du cache dans un fil : ne jamais bloquer la boucle du bot sur du
     disque ou du reseau, sinon le bot parait fige pour tout le monde."""
     return await asyncio.to_thread(
-        lambda: (celcat.charger(hors_ligne=True)[0], dv.lire()))
+        lambda: (edt.charger(hors_ligne=True)[0], promo.lire_devoirs()))
 
 
 async def _rendu(fabrique, nom="image"):
@@ -253,7 +239,7 @@ async def _rendu(fabrique, nom="image"):
     """
     if not config.IMAGES:
         return None, "les images sont désactivées dans config.yaml (affichage.images)"
-    if not img.DISPONIBLE:
+    if not image.DISPONIBLE:
         return None, "Pillow n'est pas installé sur le serveur (`pip install pillow`)"
 
     def travail():
@@ -266,7 +252,7 @@ async def _rendu(fabrique, nom="image"):
 
     try:
         octets = await asyncio.to_thread(travail)
-    except img.PillowManquant as e:
+    except image.PillowManquant as e:
         return None, str(e)
     except OSError as e:
         return None, f"impossible d'écrire l'image : {e}"
@@ -285,10 +271,10 @@ def lancer_daemon():
             assistant.daemon()
         except Exception:
             traceback.print_exc()
-            notif.envoyer("Le daemon a planté",
-                          ["Il repart dans 60 s. Détails dans la console.",
-                           f"```{traceback.format_exc()[-600:]}```"],
-                          couleur="alerte", ping=True, canal="alertes")
+            affichage.envoyer("Le daemon a planté",
+                              ["Il repart dans 60 s. Détails dans la console.",
+                               f"```{traceback.format_exc()[-600:]}```"],
+                              couleur="alerte", ping=True, canal="alertes")
             time.sleep(60)
 
 
@@ -365,7 +351,7 @@ class Assistant(discord.Client):
             return
         self._heure_signalee = True
         await asyncio.to_thread(
-            notif.envoyer, "Le bot n'est pas à l'heure",
+            affichage.envoyer, "Le bot n'est pas à l'heure",
             ["Tous les horaires de `config.yaml` sont donc décalés : briefings, "
              "heures de silence, rappels.", "```" + "\n".join(lignes) + "```"],
             "devoir", False, "logs")
@@ -443,12 +429,12 @@ class ComposantCyu(discord.ui.DynamicItem[discord.ui.Item], template=TEMPLATE):
 
     def __init__(self, source):
         """`source` est un ui.Bouton ou un ui.Menu (interface.py)."""
-        if isinstance(source, ui.Menu):
-            composant = ui._menu_simple(source)
+        if isinstance(source, affichage.Menu):
+            composant = affichage._menu_simple(source)
         else:
             composant = discord.ui.Button(
                 label=source.libelle[:80],
-                style=ui.STYLES.get(source.style, ui.STYLES["gris"]),
+                style=affichage.STYLES.get(source.style, affichage.STYLES["gris"]),
                 custom_id=source.custom_id, emoji=source.emoji,
                 disabled=source.inactif)
         super().__init__(composant)
@@ -481,13 +467,13 @@ def carte(*args, **kw):
     """interface.carte(), avec nos composants persistants injectes."""
     kw.setdefault("fabrique_bouton", BoutonCyu)
     kw.setdefault("fabrique_menu", MenuCyu)
-    return ui.carte(*args, **kw)
+    return affichage.carte(*args, **kw)
 
 
 def carte_composee(*args, **kw):
     kw.setdefault("fabrique_bouton", BoutonCyu)
     kw.setdefault("fabrique_menu", MenuCyu)
-    return ui.carte_composee(*args, **kw)
+    return affichage.carte_composee(*args, **kw)
 
 
 # --- Envoyer ou remplacer ----------------------------------------------------
@@ -538,7 +524,7 @@ async def remplacer(inter, vue, fichiers=()):
 # les memes fonctions — les trois ne peuvent donc pas diverger.
 # =============================================================================
 def _b(libelle, action, *args, style="gris", emoji=None, inactif=False):
-    return ui.Bouton(libelle, action, tuple(args), style, emoji, inactif)
+    return affichage.Bouton(libelle, action, tuple(args), style, emoji, inactif)
 
 
 def _s(n):
@@ -550,28 +536,28 @@ def _s(n):
 async def vue_jour(jour, texte=False):
     cours, liste_devoirs = await _donnees()
     auj = date.today()
-    titre = vue.jour_relatif(jour, auj).capitalize()
-    if titre.lower() != vue.jour_fr(jour):
-        titre += f" — {vue.jour_fr(jour)}"
+    titre = affichage.jour_relatif(jour, auj).capitalize()
+    if titre.lower() != affichage.jour_fr(jour):
+        titre += f" — {affichage.jour_fr(jour)}"
 
     navigation = [
         _b("◀", "edt", "j", jour - timedelta(days=1)),
         _b("Aujourd'hui", "edt", "j", auj, style="bleu" if jour != auj else "gris",
            inactif=jour == auj),
         _b("▶", "edt", "j", jour + timedelta(days=1)),
-        _b("La semaine", "edt", "s", celcat.semaine_de(jour), emoji="🗓️"),
+        _b("La semaine", "edt", "s", edt.semaine_de(jour), emoji="🗓️"),
     ]
 
     if texte:
-        corps = vue.bloc_journee(cours, liste_devoirs, jour, avec_reveil=jour != auj)
+        corps = affichage.bloc_journee(cours, liste_devoirs, jour, avec_reveil=jour != auj)
         navigation.append(_b("En photo", "edt", "j", jour, emoji="📷"))
         return carte(titre, corps, "cours", boutons=navigation), []
 
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_jour(cours, liste_devoirs, jour, chemin),
+        lambda chemin: image.rendre_jour(cours, liste_devoirs, jour, chemin),
         nom=f"jour-{jour:%Y-%m-%d}")
     if fichier is None:
-        corps = vue.bloc_journee(cours, liste_devoirs, jour, avec_reveil=jour != auj)
+        corps = affichage.bloc_journee(cours, liste_devoirs, jour, avec_reveil=jour != auj)
         return carte(titre, corps, "cours", boutons=navigation, pied=souci), []
 
     legende = assistant.legende_jour(cours, liste_devoirs, jour)
@@ -589,7 +575,7 @@ async def vue_grille(debut, fin, texte=False):
     saut = timedelta(days=7 if portee <= 7 else portee + 1)
 
     auj = date.today()
-    cette = celcat.semaine_de(auj)
+    cette = edt.semaine_de(auj)
     est_semaine = debut.weekday() == 0 and portee == 6
     if est_semaine:
         titre = f"Semaine du {debut:%d/%m}"
@@ -598,7 +584,7 @@ async def vue_grille(debut, fin, texte=False):
         elif debut == cette + timedelta(days=7):
             titre = "La semaine prochaine"
     else:
-        titre = f"Du {vue.jour_fr(debut, court=True)} au {vue.jour_fr(fin, court=True)}"
+        titre = f"Du {affichage.jour_fr(debut, court=True)} au {affichage.jour_fr(fin, court=True)}"
 
     navigation = [
         _b("◀", "edt", "g", debut - saut, fin - saut),
@@ -614,16 +600,16 @@ async def vue_grille(debut, fin, texte=False):
         return carte(titre, corps, "cours", boutons=navigation), []
 
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre(cours, debut, fin, chemin), nom="edt")
+        lambda chemin: image.rendre(cours, debut, fin, chemin), nom="edt")
     if fichier is None:
         _, corps, _ = _grille_texte(cours, debut, fin)
         return carte(titre, corps, "cours", boutons=navigation, pied=souci), []
 
-    semaine_ = stats.semaine(cours, celcat.semaine_de(debut)) if est_semaine else None
-    sous = (f"{vue.duree_fr(semaine_.total_minutes)} de cours · "
+    semaine_ = edt.semaine(cours, edt.semaine_de(debut)) if est_semaine else None
+    sous = (f"{affichage.duree_fr(semaine_.total_minutes)} de cours · "
             f"{semaine_.seances} séances · {semaine_.jours_travailles} jours"
             if semaine_ and not semaine_.vide else
-            f"{vue.jour_fr(debut)} → {vue.jour_fr(fin)}")
+            f"{affichage.jour_fr(debut)} → {affichage.jour_fr(fin)}")
     navigation.append(_b("Texte", "edt", "x", debut, fin, emoji="📝"))
     if est_semaine:
         navigation = [navigation, [_b("Ce que pèse la semaine", "stats", debut, emoji="📊")]]
@@ -633,12 +619,12 @@ async def vue_grille(debut, fin, texte=False):
 
 def _grille_texte(cours, debut, fin):
     if fin - debut <= timedelta(days=7):
-        lundi = celcat.semaine_de(debut)
-        return f"Semaine du {lundi:%d/%m}", vue.bloc_semaine(cours, lundi), "cours"
-    lignes, lundi = [], celcat.semaine_de(debut)
+        lundi = edt.semaine_de(debut)
+        return f"Semaine du {lundi:%d/%m}", affichage.bloc_semaine(cours, lundi), "cours"
+    lignes, lundi = [], edt.semaine_de(debut)
     while lundi <= fin:
         lignes += [f"**Semaine du {lundi:%d/%m}**"] + \
-                  vue.bloc_semaine(cours, lundi, detail=False) + [""]
+                  affichage.bloc_semaine(cours, lundi, detail=False) + [""]
         lundi += timedelta(days=7)
     return "Période", lignes, "cours"
 
@@ -659,12 +645,12 @@ async def vue_prochain():
                _b("Demain", "edt", "j", date.today() + timedelta(days=1), emoji="🌙"),
                _b("Actualiser", "pan", "prochain", emoji="🔄")]
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_prochain(cours, liste_devoirs, chemin), nom="prochain")
-    corps = vue.bloc_prochain(cours, liste_devoirs)
+        lambda chemin: image.rendre_prochain(cours, liste_devoirs, chemin), nom="prochain")
+    corps = affichage.bloc_prochain(cours, liste_devoirs)
     if fichier is None:
         return carte("Prochain cours", corps, "cours", boutons=boutons, pied=souci), []
-    suivant = celcat.prochain(cours)
-    sous = (f"{suivant.titre} · {vue.compte_a_rebours(suivant.debut)}"
+    suivant = edt.prochain(cours)
+    sous = (f"{suivant.titre} · {affichage.compte_a_rebours(suivant.debut)}"
             if suivant else "rien de prévu")
     return carte("Prochain cours", [], "cours", sous_titre=sous, image=fichier,
                  boutons=boutons), [fichier]
@@ -672,26 +658,26 @@ async def vue_prochain():
 
 # --- Ce qui a bouge ----------------------------------------------------------
 async def vue_actu(jours=7):
-    jours = max(1, min(int(jours), actu.RETENTION_JOURS))
-    liste = await asyncio.to_thread(actu.historique, jours)
+    jours = max(1, min(int(jours), edt.RETENTION_JOURS))
+    liste = await asyncio.to_thread(edt.historique_actu, jours)
     boutons = [_b(f"{n} jours", "actu", n, style="bleu" if n == jours else "gris",
                   inactif=n == jours) for n in (7, 14, 30)]
     if not liste:
-        dernier = await asyncio.to_thread(actu.quand_dernier)
+        dernier = await asyncio.to_thread(edt.quand_dernier)
         corps = [f"Aucun changement d'emploi du temps depuis {jours} jours."]
         if dernier:
             corps.append(f"Le dernier remonte au **{dernier:%d/%m à %H:%M}**.")
         return carte("Rien n'a bougé", corps, "calme", boutons=boutons), []
 
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_changements(
+        lambda chemin: image.rendre_changements(
             liste, chemin, titre="Ce qui a changé",
             sous_titre=f"sur les {jours} derniers jours"), nom="changements")
-    lignes, _ = await asyncio.to_thread(chg.bloc, liste)
+    lignes, _ = await asyncio.to_thread(edt.bloc_changements, liste)
     if fichier is None:
-        return carte(chg.titre(liste), lignes, chg.couleur(liste),
+        return carte(edt.titre(liste), lignes, edt.couleur(liste),
                      boutons=boutons, pied=souci), []
-    return carte(chg.titre(liste), [], chg.couleur(liste),
+    return carte(edt.titre(liste), [], edt.couleur(liste),
                  sous_titre=f"sur les {jours} derniers jours", image=fichier,
                  boutons=boutons), [fichier]
 
@@ -700,8 +686,8 @@ async def vue_actu(jours=7):
 def _quand_devoir(d):
     """« pour demain », « dans 5 j · lun. 21/09 » : l'urgence d'un devoir en
     quelques mots, et son pictogramme."""
-    ech = dv.echeance_dt(d)
-    reste = dv.jours_restants(d)
+    ech = promo.echeance_dt(d)
+    reste = promo.jours_restants(d)
     if reste is None:
         return "sans échéance", ""
     if reste < 0:
@@ -710,7 +696,7 @@ def _quand_devoir(d):
         return "**pour aujourd'hui**", "🔥"
     if reste == 1:
         return "**pour demain**", "⚠️"
-    quand = f"dans {reste} j · {vue.jour_fr(ech.date(), court=True)}"
+    quand = f"dans {reste} j · {affichage.jour_fr(ech.date(), court=True)}"
     if ech.strftime("%H:%M") not in ("23:59", "00:00"):
         quand += f" à {ech:%H:%M}"
     return quand, ("🟠" if reste <= 3 else "")
@@ -731,8 +717,8 @@ def _texte_devoir(d):
 async def vue_devoirs(page=0):
     """La liste interactive : un bouton « fait » par devoir, un menu pour en
     supprimer un, un bouton pour en ajouter."""
-    liste = await asyncio.to_thread(dv.lire)
-    restants = dv.actifs(liste)
+    liste = await asyncio.to_thread(promo.lire_devoirs)
+    restants = promo.actifs(liste)
     faits = [d for d in liste if d.get("fait")]
     pages = max(1, -(-len(restants) // DEVOIRS_PAR_PAGE))
     page = max(0, min(int(page), pages - 1))
@@ -754,28 +740,28 @@ async def vue_devoirs(page=0):
     tranche = restants[page * DEVOIRS_PAR_PAGE:(page + 1) * DEVOIRS_PAR_PAGE]
     elements = [(_texte_devoir(d), _b("Fait", "dev", "fait", d["id"], style="vert",
                                       emoji="✅")) for d in tranche]
-    corps = ui.sections(elements, fabrique_bouton=BoutonCyu)
-    menu = ui.Menu("devsel", "Supprimer un devoir…",
-                   [(f"#{d['id']} {d['titre']}"[:100], str(d["id"]),
-                     (f"{d.get('matiere') or ''} {_quand_devoir(d)[0]}"
-                      .replace("*", "").strip() or None), "🗑️")
-                    for d in restants[:25]], args=("suppr",))
-    teinte = "alerte" if any((r := dv.jours_restants(d)) is not None and r <= 0
-                              for d in restants) \
+    corps = affichage.sections(elements, fabrique_bouton=BoutonCyu)
+    menu = affichage.Menu("devsel", "Supprimer un devoir…",
+                          [(f"#{d['id']} {d['titre']}"[:100], str(d["id"]),
+                            (f"{d.get('matiere') or ''} {_quand_devoir(d)[0]}"
+                             .replace("*", "").strip() or None), "🗑️")
+                           for d in restants[:25]], args=("suppr",))
+    teinte = "alerte" if any((r := promo.jours_restants(d)) is not None and r <= 0
+                             for d in restants) \
         else "devoir"
     return carte_composee("Devoirs", corps, teinte, sous_titre=sous,
                           boutons=actions, menus=[menu]), []
 
 
 async def vue_devoirs_photo():
-    liste = await asyncio.to_thread(dv.lire)
-    restants = dv.actifs(liste)
+    liste = await asyncio.to_thread(promo.lire_devoirs)
+    restants = promo.actifs(liste)
     boutons = [_b("La liste", "dev", "page", 0, style="bleu", emoji="📋"),
                _b("Ajouter", "dev", "ajout", style="vert", emoji="➕")]
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_devoirs(liste, chemin), nom="devoirs")
+        lambda chemin: image.rendre_devoirs(liste, chemin), nom="devoirs")
     if fichier is None:
-        return carte("Devoirs", vue.bloc_devoirs(liste)[1:], "devoir",
+        return carte("Devoirs", affichage.bloc_devoirs(liste)[1:], "devoir",
                      boutons=boutons, pied=souci), []
     return carte("Devoirs", [], "devoir",
                  sous_titre=f"{len(restants)} en attente", image=fichier,
@@ -784,15 +770,15 @@ async def vue_devoirs_photo():
 
 def _choix_devoirs(saisie):
     """Les devoirs en attente, pour l'autocompletion de /fait et /supprimer."""
-    bas = celcat.normaliser(saisie)
+    bas = edt.normaliser(saisie)
     sortie = []
-    for d in dv.actifs():
+    for d in promo.actifs():
         libelle = f"#{d['id']} {d['titre']}"
         if d.get("matiere"):
             libelle += f" · {d['matiere']}"
         quand, _ = _quand_devoir(d)
         libelle += f" — {quand.replace('*', '')}"
-        if not bas or bas in celcat.normaliser(libelle):
+        if not bas or bas in edt.normaliser(libelle):
             sortie.append(app_commands.Choice(name=libelle[:100], value=int(d["id"])))
     return sortie[:25]
 
@@ -800,10 +786,10 @@ def _choix_devoirs(saisie):
 # --- Les stats de la semaine -------------------------------------------------
 async def vue_stats(lundi):
     cours, _ = await _donnees()
-    lundi = celcat.semaine_de(lundi)
-    semaine_ = await asyncio.to_thread(stats.semaine, cours, lundi)
-    note = stats.avertissement(semaine_, cours)
-    cette = celcat.semaine_de(date.today())
+    lundi = edt.semaine_de(lundi)
+    semaine_ = await asyncio.to_thread(edt.semaine, cours, lundi)
+    note = edt.avertissement(semaine_, cours)
+    cette = edt.semaine_de(date.today())
     navigation = [
         [_b("◀", "stats", lundi - timedelta(days=7)),
          _b("Cette semaine", "stats", cette, style="bleu", inactif=lundi == cette),
@@ -815,10 +801,10 @@ async def vue_stats(lundi):
     titre = f"Ta semaine — {semaine_.libelle}"
 
     if semaine_.vide:
-        archive = stats.archive_de(lundi)
+        archive = edt.archive_de(lundi)
         corps = ["Aucun cours connu pour cette semaine-là."]
         if archive:
-            corps.append(f"Elle pesait **{vue.duree_fr(archive)}** d'après l'archive, "
+            corps.append(f"Elle pesait **{affichage.duree_fr(archive)}** d'après l'archive, "
                          f"mais CELCAT n'en garde plus le détail.")
         elif lundi < cette:
             corps.append("CELCAT ne sert que l'avenir : une semaine passée n'est "
@@ -826,16 +812,16 @@ async def vue_stats(lundi):
         return carte(titre, corps, "calme", boutons=navigation), []
 
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_stats(semaine_, chemin, cours=cours,
-                                        avertissement=note), nom="stats")
+        lambda chemin: image.rendre_stats(semaine_, chemin, cours=cours,
+                                          avertissement=note), nom="stats")
     if fichier is None:
-        corps = await asyncio.to_thread(stats.bloc, semaine_, cours)
+        corps = await asyncio.to_thread(edt.bloc_stats, semaine_, cours)
         if note:
             corps = [f"⚠️ *{note}*", ""] + corps
         return carte(titre, corps, "info", boutons=navigation, pied=souci), []
-    sous = (f"{vue.duree_fr(semaine_.total_minutes)} de cours · "
+    sous = (f"{affichage.duree_fr(semaine_.total_minutes)} de cours · "
             f"{semaine_.seances} séances · "
-            f"{vue.duree_fr(semaine_.trous_minutes)} de trous")
+            f"{affichage.duree_fr(semaine_.trous_minutes)} de trous")
     return carte(titre, [f"-# ⚠️ {note}"] if note else [], "info", sous_titre=sous,
                  image=fichier, boutons=navigation), [fichier]
 
@@ -843,21 +829,21 @@ async def vue_stats(lundi):
 async def vue_bilan():
     """Tout ce que CELCAT connait : les heures par matiere, et par semaine."""
     cours, _ = await _donnees()
-    b = await asyncio.to_thread(stats.bilan, cours)
-    boutons = [_b("Cette semaine", "stats", celcat.semaine_de(date.today()),
+    b = await asyncio.to_thread(edt.bilan, cours)
+    boutons = [_b("Cette semaine", "stats", edt.semaine_de(date.today()),
                   style="bleu", emoji="📊"),
-               _b("La grille", "edt", "s", celcat.semaine_de(date.today()), emoji="🗓️"),
+               _b("La grille", "edt", "s", edt.semaine_de(date.today()), emoji="🗓️"),
                _b("Actualiser", "bilan", emoji="🔄")]
     titre = "Tout l'emploi du temps"
     if b.vide:
         return carte(titre, ["CELCAT ne connaît aucun cours pour l'instant."],
                      "calme", boutons=boutons), []
-    sous = (f"{b.libelle} · {vue.duree_fr(b.total_minutes)} de cours · "
+    sous = (f"{b.libelle} · {affichage.duree_fr(b.total_minutes)} de cours · "
             f"{b.seances} séances · {len(b.matieres)} matières")
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_bilan(b, chemin, cours=cours), nom="bilan")
+        lambda chemin: image.rendre_bilan(b, chemin, cours=cours), nom="bilan")
     if fichier is None:
-        return carte(titre, stats.bloc_bilan(b), "info", boutons=boutons, pied=souci), []
+        return carte(titre, edt.bloc_bilan(b), "info", boutons=boutons, pied=souci), []
     return carte(titre, [], "info", sous_titre=sous, image=fichier,
                  boutons=boutons, pied="tout ce que CELCAT connaît à ce jour"), [fichier]
 
@@ -865,15 +851,15 @@ async def vue_bilan():
 # --- Cette semaine contre la precedente --------------------------------------
 async def vue_comparer(lundi):
     cours, liste_devoirs = await _donnees()
-    lundi = celcat.semaine_de(lundi)
+    lundi = edt.semaine_de(lundi)
     avant_l = lundi - timedelta(days=7)
-    cette = await asyncio.to_thread(stats.cote_semaine, cours, lundi)
-    avant = await asyncio.to_thread(stats.cote_semaine, cours, avant_l)
-    dev_cette = stats.devoirs_de_la_semaine(liste_devoirs, lundi)
-    dev_avant = stats.devoirs_de_la_semaine(liste_devoirs, avant_l)
-    lignes = stats.bloc_comparaison(cette, avant, dev_cette, dev_avant)
+    cette = await asyncio.to_thread(edt.cote_semaine, cours, lundi)
+    avant = await asyncio.to_thread(edt.cote_semaine, cours, avant_l)
+    dev_cette = edt.devoirs_de_la_semaine(liste_devoirs, lundi)
+    dev_avant = edt.devoirs_de_la_semaine(liste_devoirs, avant_l)
+    lignes = edt.bloc_comparaison(cette, avant, dev_cette, dev_avant)
 
-    ref = celcat.semaine_de(date.today())
+    ref = edt.semaine_de(date.today())
     titre = ("Cette semaine" if lundi == ref else f"Semaine du {lundi:%d/%m}") \
         + " vs la précédente"
     navigation = [
@@ -895,7 +881,7 @@ async def vue_comparer(lundi):
 # --- Les examens : compte a rebours ------------------------------------------
 async def vue_examens():
     cours, liste_devoirs = await _donnees()
-    liste = await asyncio.to_thread(stats.examens, cours, liste_devoirs)
+    liste = await asyncio.to_thread(edt.examens, cours, liste_devoirs)
     boutons = [_b("Ajouter un examen", "dev", "ajout", "examen", style="vert", emoji="🎓"),
                _b("Créneaux libres", "libre", 14, emoji="🫧"),
                _b("Devoirs", "dev", "page", 0, emoji="📚"),
@@ -921,7 +907,7 @@ async def vue_examens():
         else:
             quand, ico = f"**J-{j}**", "📅"
         titre = e["matiere"] or e["titre"]
-        detail = f"{vue.jour_fr(e['quand'].date(), court=True)} {e['quand']:%H:%M}"
+        detail = f"{affichage.jour_fr(e['quand'].date(), court=True)} {e['quand']:%H:%M}"
         if e["ou"]:
             detail += f" · {e['ou']}"
         if e["source"] == "devoir":
@@ -931,16 +917,16 @@ async def vue_examens():
         lignes.append(f"-# … et {len(liste) - 12} autres")
 
     premier = liste[0]
-    libre = await asyncio.to_thread(stats.minutes_libres, cours, premier["quand"])
-    lignes += ["", f"**D'ici le premier** ({vue.jour_relatif(premier['quand'].date())}) : "
-                   f"**{vue.duree_fr(libre)}** de créneaux libres en semaine pour "
-                   f"réviser, sans toucher aux week-ends."]
+    libre = await asyncio.to_thread(edt.minutes_libres, cours, premier["quand"])
+    lignes += ["", f"**D'ici le premier** ({affichage.jour_relatif(premier['quand'].date())}) : "
+               f"**{affichage.duree_fr(libre)}** de créneaux libres en semaine pour "
+               f"réviser, sans toucher aux week-ends."]
     if config.EVENEMENTS_EXAMENS:
         lignes.append("-# 📅 Ils sont aussi dans les **événements du serveur** : clique "
                       "sur la cloche « intéressé » et Discord te rappelle chacun.")
     teinte = ("alerte" if premier["jours"] <= 1 else
               "devoir" if premier["jours"] <= 7 else "info")
-    sous = (f"{len(liste)} à venir · le premier {vue.jour_relatif(premier['quand'].date())}")
+    sous = (f"{len(liste)} à venir · le premier {affichage.jour_relatif(premier['quand'].date())}")
     return carte("Examens — compte à rebours", lignes, teinte, sous_titre=sous,
                  boutons=boutons), []
 
@@ -1003,8 +989,8 @@ def _boutons_ects(quoi, m=None):
 def _image_ects(m, quoi):
     """La fonction de dessin de la vue demandee, prete pour _rendu()."""
     if quoi == "annee":
-        return lambda chemin: img.rendre_ects_annee(m, chemin)
-    return lambda chemin: img.rendre_ects(m, int(quoi), chemin)
+        return lambda chemin: image.rendre_ects_annee(m, chemin)
+    return lambda chemin: image.rendre_ects(m, int(quoi), chemin)
 
 
 def _nom_ects(quoi):
@@ -1021,15 +1007,15 @@ async def vue_ects(quoi=""):
     la meme chose, en moins dense.
     """
     try:
-        m = await asyncio.to_thread(mq.charger)
-    except (mq.MaquetteIntrouvable, OSError) as e:
+        m = await asyncio.to_thread(ecole.charger_maquette)
+    except (ecole.MaquetteIntrouvable, OSError) as e:
         return _sans_maquette(e)
 
     quoi = _quoi_ects(quoi)
     boutons = _boutons_ects(quoi, m)
     if quoi == "annee":
         titre = "Maquette de l'année"
-        sous = (f"{m.entete} · {mq.nombre_fr(m.ects)} ECTS · "
+        sous = (f"{m.entete} · {ecole.nombre_fr(m.ects)} ECTS · "
                 f"{len(m.semestres)} semestres")
     else:
         s = m.semestre(int(quoi))
@@ -1037,8 +1023,8 @@ async def vue_ects(quoi=""):
             return _sans_maquette(f"Le semestre {quoi} n'y figure pas.")
         evaluees = [e for e in s.matieres if e.evalue]
         titre = f"Maquette — {s.nom}"
-        sous = (f"{mq.nombre_fr(s.ects)} ECTS · {len(s.ues)} UE · "
-                f"{len(evaluees)} matières · {mq.nombre_fr(s.heures)} h de cours")
+        sous = (f"{ecole.nombre_fr(s.ects)} ECTS · {len(s.ues)} UE · "
+                f"{len(evaluees)} matières · {ecole.nombre_fr(s.heures)} h de cours")
 
     # Le classeur dit lui-meme quand un chiffre est une hypothese : on le
     # repete sous le tableau. Des heures reconstituees presentees comme
@@ -1052,7 +1038,7 @@ async def vue_ects(quoi=""):
         # de chiffres qui ne survivent pas a un ecran etroit.
         lignes = []
         for s in (m.semestres if quoi == "annee" else [m.semestre(int(quoi))]):
-            lignes += mq.bloc_semestre(s, detail=quoi != "annee") + [""]
+            lignes += ecole.bloc_semestre(s, detail=quoi != "annee") + [""]
         return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
                      pied=souci), []
     return carte(titre, [], "info", sous_titre=sous, image=fichier,
@@ -1068,8 +1054,8 @@ async def vue_ects_telechargement(quoi=""):
     retourner chercher le fichier a la main.
     """
     try:
-        m = await asyncio.to_thread(mq.charger)
-    except (mq.MaquetteIntrouvable, OSError) as e:
+        m = await asyncio.to_thread(ecole.charger_maquette)
+    except (ecole.MaquetteIntrouvable, OSError) as e:
         return _sans_maquette(e)
 
     quoi = _quoi_ects(quoi)
@@ -1115,7 +1101,6 @@ async def vue_ects_telechargement(quoi=""):
     return vue_, fichiers
 
 
-
 # --- Le calendrier d'alternance ----------------------------------------------
 # Ce que /calendrier accepte dans « quand ». Un seul champ, trois facons de
 # s'en servir : un MOIS (« novembre », « janvier 27 »), une DUREE a partir
@@ -1143,12 +1128,12 @@ def _quand_du_mois(cle):
 
 def _mois_numero(nom):
     """« nov », « novembre », « aout » -> le numero du mois, ou None."""
-    nom = celcat.normaliser(nom).rstrip(".")
+    nom = edt.normaliser(nom).rstrip(".")
     if not nom:
         return None
-    for i, complet in enumerate(alt.MOIS_FR, start=1):
-        court = celcat.normaliser(alt.MOIS_COURTS[i - 1]).rstrip(".")
-        complet = celcat.normaliser(complet)
+    for i, complet in enumerate(ecole.MOIS_FR, start=1):
+        court = edt.normaliser(ecole.MOIS_COURTS[i - 1]).rstrip(".")
+        complet = edt.normaliser(complet)
         if nom == complet or nom == court or (len(nom) >= 3 and complet.startswith(nom)):
             return i
     return None
@@ -1210,7 +1195,7 @@ def fenetre_alternance(texte, cal):
     mode vaut "mois" (une ou plusieurs grilles mensuelles), "fenetre" (une
     duree a partir d'aujourd'hui) ou "annee" (la vue d'ensemble).
     """
-    brut = celcat.normaliser(texte)
+    brut = edt.normaliser(texte)
     auj = date.today()
 
     if brut in ("annee", "annee", "tout", "toute l'annee", "annee entiere", "tous"):
@@ -1234,8 +1219,8 @@ def fenetre_alternance(texte, cal):
         # Deja a l'ecole aujourd'hui ? Alors c'est de CETTE periode qu'on
         # parle : repondre « dans trois semaines » a quelqu'un qui est en
         # cours serait absurde.
-        p = cal.periode_de(auj) if cal.nature(auj) in alt.ECOLE \
-            else cal.suivante(auj, alt.ECOLE)
+        p = cal.periode_de(auj) if cal.nature(auj) in ecole.ECOLE \
+            else cal.suivante(auj, ecole.ECOLE)
         if p is None:
             raise ValueError("Plus aucune période à l'école dans ce calendrier.")
         return (date(p.debut.year, p.debut.month, 1),
@@ -1246,13 +1231,13 @@ def fenetre_alternance(texte, cal):
     if m:
         nombre = max(1, min(13, int(m.group(1))))
         return auj, _plus_mois(auj, nombre), "fenetre", \
-            f"Les {alt.compte_fr(nombre, 'mois', 'mois')} qui viennent"
+            f"Les {ecole.compte_fr(nombre, 'mois', 'mois')} qui viennent"
 
     m = RE_ALT_SEMAINES.match(brut)
     if m:
         nombre = max(1, min(60, int(m.group(1))))
         return auj, auj + timedelta(days=7 * nombre), "fenetre", \
-            f"Les {alt.compte_fr(nombre, 'semaine')} qui viennent"
+            f"Les {ecole.compte_fr(nombre, 'semaine')} qui viennent"
 
     m = RE_ALT_MOIS_NUM.match(brut)
     if m:
@@ -1266,7 +1251,7 @@ def fenetre_alternance(texte, cal):
     if m:
         nombre = max(1, min(400, int(m.group(1))))
         return auj, auj + timedelta(days=nombre), "fenetre", \
-            f"Les {alt.compte_fr(nombre, 'jour')} qui viennent"
+            f"Les {ecole.compte_fr(nombre, 'jour')} qui viennent"
 
     m = RE_ALT_MOIS_NOM.match(brut)
     if m:
@@ -1276,7 +1261,7 @@ def fenetre_alternance(texte, cal):
             if annee is None:
                 raise ValueError(
                     f"Le calendrier {cal.annee} ne couvre pas "
-                    f"{alt.MOIS_FR[mois - 1]}"
+                    f"{ecole.MOIS_FR[mois - 1]}"
                     + (f" {m.group(2)}." if m.group(2) else "."))
             return date(annee, mois, 1), _fin_de_mois(annee, mois), "mois", None
 
@@ -1298,7 +1283,7 @@ def _boutons_alternance(cal, debut, fin, mode):
             else None
         boutons.append(_b("◀", "alt", "m", _cle_mois(*precedent)) if precedent
                        else _b("◀", "alt", "m", _cle_mois(*courant), inactif=True))
-        boutons.append(_b(alt.MOIS_FR[suivant[1] - 1].capitalize() + " ▶", "alt",
+        boutons.append(_b(ecole.MOIS_FR[suivant[1] - 1].capitalize() + " ▶", "alt",
                           "m", _cle_mois(*suivant)) if suivant
                        else _b("▶", "alt", "m", _cle_mois(*courant), inactif=True))
 
@@ -1322,23 +1307,23 @@ def _menu_alternance(cal, debut, mode):
     for annee, mois in _mois_du_calendrier(cal):
         fin_mois = _fin_de_mois(annee, mois)
         comptes = cal.comptes(date(annee, mois, 1), fin_mois)
-        morceaux = [f"{n} j {alt.NOMS.get(nat, nat).lower()}"
+        morceaux = [f"{n} j {ecole.NOMS.get(nat, nat).lower()}"
                     for nat, n in sorted(comptes.items(), key=lambda kv: -kv[1])
-                    if nat in (alt.FORMATION, alt.EXAMEN, alt.RATTRAPAGE)]
-        libelle = f"{alt.MOIS_FR[mois - 1].capitalize()} {annee}"
+                    if nat in (ecole.FORMATION, ecole.EXAMEN, ecole.RATTRAPAGE)]
+        libelle = f"{ecole.MOIS_FR[mois - 1].capitalize()} {annee}"
         options.append((libelle, _cle_mois(annee, mois),
                         " · ".join(morceaux)[:100] or "tout en entreprise", "📆"))
     if not options:
         return []
-    return [ui.Menu("altsel", "Choisir un mois…", options)]
+    return [affichage.Menu("altsel", "Choisir un mois…", options)]
 
 
 def _image_alternance(cal, debut, fin, mode, titre, sous_titre, aujourd_hui):
     """La fonction de dessin de la vue demandee, prete pour _rendu()."""
     if mode == "annee":
-        return lambda chemin: img.rendre_alternance_annee(
+        return lambda chemin: image.rendre_alternance_annee(
             cal, chemin, aujourd_hui=aujourd_hui)
-    return lambda chemin: img.rendre_alternance(
+    return lambda chemin: image.rendre_alternance(
         cal, debut, fin, chemin, titre=titre, sous_titre=sous_titre,
         aujourd_hui=aujourd_hui)
 
@@ -1353,38 +1338,38 @@ async def vue_alternance(quand="", forme="photo"):
     dates, pas avec une couleur.
     """
     try:
-        cal = await asyncio.to_thread(alt.charger)
-    except (alt.CalendrierIntrouvable, OSError) as e:
+        cal = await asyncio.to_thread(ecole.charger_alternance)
+    except (ecole.CalendrierIntrouvable, OSError) as e:
         return _sans_calendrier(e), []
 
     try:
         debut, fin, mode, titre = fenetre_alternance(quand, cal)
     except ValueError as e:
-        return ui.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
-                         f"`3 mois`, ou `année`.", "Date incomprise"), []
+        return affichage.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
+                                f"`3 mois`, ou `année`.", "Date incomprise"), []
 
     auj = date.today()
     if mode == "annee":
         titre = titre or "Calendrier d'alternance"
         sous = (f"{cal.annee} · l'année entière · "
-                f"{alt.intervalle_fr(cal.debut, cal.fin, court=True)}")
+                f"{ecole.intervalle_fr(cal.debut, cal.fin, court=True)}")
     elif mode == "mois":
-        titre = titre or f"{alt.MOIS_FR[debut.month - 1].capitalize()} {debut.year}"
+        titre = titre or f"{ecole.MOIS_FR[debut.month - 1].capitalize()} {debut.year}"
         comptes = cal.comptes(debut, fin)
         sous = f"{cal.annee} · " + (" · ".join(
-            f"{n} j {alt.NOMS.get(nat, nat).lower()}"
+            f"{n} j {ecole.NOMS.get(nat, nat).lower()}"
             for nat, n in sorted(comptes.items(), key=lambda kv: -kv[1]))
             or "aucun jour d'alternance")
     else:
         titre = titre or "Calendrier d'alternance"
-        sous = f"{cal.annee} · {alt.intervalle_fr(debut, fin)}"
+        sous = f"{cal.annee} · {ecole.intervalle_fr(debut, fin)}"
 
     boutons = _boutons_alternance(cal, debut, fin, mode)
     menus = _menu_alternance(cal, debut, mode)
-    lignes = alt.bloc_resume(cal, auj)
+    lignes = ecole.bloc_resume(cal, auj)
 
     if forme == "texte":
-        lignes = lignes + [""] + (alt.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
+        lignes = lignes + [""] + (ecole.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
                                   or ["-# Aucune période sur cette fenêtre."])
         return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
                      menus=menus), []
@@ -1394,7 +1379,7 @@ async def vue_alternance(quand="", forme="photo"):
         nom="alternance-annee" if mode == "annee" else f"alternance-{debut:%Y-%m}")
     if fichier is None:
         # Sans image, le texte dit la meme chose, en moins dense.
-        lignes = lignes + [""] + (alt.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
+        lignes = lignes + [""] + (ecole.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
                                   or ["-# Aucune période sur cette fenêtre."])
         return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
                      menus=menus, pied=souci), []
@@ -1409,14 +1394,14 @@ async def vue_alternance_telechargement():
     Deux fichiers pour deux usages : l'image se renvoie dans une conversation,
     le PDF est le document officiel, celui qu'on montre a son entreprise."""
     try:
-        cal = await asyncio.to_thread(alt.charger)
-    except (alt.CalendrierIntrouvable, OSError) as e:
+        cal = await asyncio.to_thread(ecole.charger_alternance)
+    except (ecole.CalendrierIntrouvable, OSError) as e:
         return _sans_calendrier(e), []
 
     auj = date.today()
     fichiers, lignes = [], []
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_alternance_annee(cal, chemin, aujourd_hui=auj),
+        lambda chemin: image.rendre_alternance_annee(cal, chemin, aujourd_hui=auj),
         nom="alternance-annee")
     if fichier is not None:
         fichier.filename = f"alternance-{cal.annee}.png"
@@ -1464,7 +1449,6 @@ def _sans_calendrier(souci):
         "alerte")
 
 
-
 # --- Le quiz Pokemon ----------------------------------------------------------
 # Le jeu tient en trois cartes : la QUESTION (une silhouette, quatre boutons),
 # la REPONSE (le Pokemon en couleur, qui a trouve), et le CLASSEMENT.
@@ -1476,7 +1460,7 @@ def _sans_calendrier(souci):
 GENERATION_CHOIX = [
     app_commands.Choice(name="toutes les générations", value=0),
 ] + [app_commands.Choice(name=f"génération {g} (n°{a} à {b})", value=g)
-     for g, (a, b) in pk.GENERATIONS.items()]
+     for g, (a, b) in promo.GENERATIONS.items()]
 
 
 def _sans_quiz(souci):
@@ -1499,7 +1483,7 @@ def _boutons_quiz(quiz):
     Le libelle porte le NOM, mais l'identifiant ne porte que la POSITION du
     bouton : « cyu:quiz:r:a3f9:2 ». Ainsi rien de ce qui circule ne trahit la
     reponse, et deux quiz ne peuvent pas se melanger."""
-    propositions = [_b(pk.nom(numero), "quiz", "r", quiz["id"], str(i))
+    propositions = [_b(promo.nom(numero), "quiz", "r", quiz["id"], str(i))
                     for i, numero in enumerate(quiz.get("choix", []))]
     return [propositions[:4],
             [_b("Je tape le nom", "quiz", "tape", quiz["id"], style="vert",
@@ -1510,34 +1494,34 @@ def _boutons_quiz(quiz):
 async def vue_quiz(generation=0, salon_id=None):
     """Poser une nouvelle question."""
     try:
-        await asyncio.to_thread(pk.catalogue)
-    except pk.PokemonIndisponible as e:
+        await asyncio.to_thread(promo.catalogue)
+    except promo.PokemonIndisponible as e:
         return _sans_quiz(e), []
 
     generation = int(generation or 0) or None
     try:
         espece, choix = await asyncio.to_thread(
-            pk.tirer, generation, 4, pk.derniers(8))
-        chemin_source = await asyncio.to_thread(pk.image, espece)
-    except pk.PokemonIndisponible as e:
+            promo.tirer, generation, 4, promo.derniers(8))
+        chemin_source = await asyncio.to_thread(promo.image_pokemon, espece)
+    except promo.PokemonIndisponible as e:
         return _sans_quiz(e), []
 
-    quiz = await asyncio.to_thread(pk.ouvrir, espece, choix, salon_id)
-    secondes = pk.DUREE_MINUTES * 60
+    quiz = await asyncio.to_thread(promo.ouvrir, espece, choix, salon_id)
+    secondes = promo.DUREE_MINUTES * 60
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_quiz(chemin_source, chemin,
-                                       numero=pk.total_joue(),
-                                       generation=generation, secondes=secondes),
+        lambda chemin: image.rendre_quiz(chemin_source, chemin,
+                                         numero=promo.total_joue(),
+                                         generation=generation, secondes=secondes),
         nom="quiz")
 
-    sous = f"question n°{pk.total_joue()}"
+    sous = f"question n°{promo.total_joue()}"
     if generation:
         sous += f" · génération {generation}"
-    sous += f" · {pk.DUREE_MINUTES} min"
+    sous += f" · {promo.DUREE_MINUTES} min"
     lignes = ["Une seule tentative par personne — réfléchis bien.",
-              f"-# ✅ {pk.POINTS_JUSTE} pts · 🥇 +{pk.PRIME_PREMIER} au premier · "
-              f"⌨️ +{pk.PRIME_TAPE} si tu tapes le nom · 🔥 +{pk.PRIME_SERIE} "
-              f"dès {pk.SERIE_MINIMUM} bonnes d'affilée"]
+              f"-# ✅ {promo.POINTS_JUSTE} pts · 🥇 +{promo.PRIME_PREMIER} au premier · "
+              f"⌨️ +{promo.PRIME_TAPE} si tu tapes le nom · 🔥 +{promo.PRIME_SERIE} "
+              f"dès {promo.SERIE_MINIMUM} bonnes d'affilée"]
     if fichier is None:
         lignes.insert(0, f"⚠️ L'image n'a pas pu être faite : {souci}")
     return carte("Qui est ce Pokémon ?", lignes, "info", sous_titre=sous,
@@ -1549,11 +1533,11 @@ async def vue_quiz_reponse(quiz, note=""):
     """La revelation : le Pokemon en couleur, et qui l'a reconnu."""
     espece = int(quiz.get("espece", 0))
     try:
-        chemin_source = await asyncio.to_thread(pk.image, espece)
-    except pk.PokemonIndisponible:
+        chemin_source = await asyncio.to_thread(promo.image_pokemon, espece)
+    except promo.PokemonIndisponible:
         chemin_source = None
 
-    lignes = pk.bloc_resultat(quiz)
+    lignes = promo.bloc_resultat(quiz)
     if note:
         lignes.insert(0, note)
     trouve = any(r.get("juste") for r in quiz.get("reponses", {}).values())
@@ -1563,32 +1547,32 @@ async def vue_quiz_reponse(quiz, note=""):
     fichier = None
     if chemin_source is not None:
         fichier, souci = await _rendu(
-            lambda chemin: img.rendre_reponse(
-                chemin_source, pk.nom(espece), espece, chemin,
-                genre=pk.genre(espece), lignes=pk.bloc_resultat(quiz),
+            lambda chemin: image.rendre_reponse(
+                chemin_source, promo.nom(espece), espece, chemin,
+                genre=promo.genre(espece), lignes=promo.bloc_resultat(quiz),
                 trouve=trouve),
             nom=f"pokemon-{espece}")
         if fichier is None:
             lignes.append(f"-# L'image n'a pas pu être faite : {souci}")
-    return carte(f"C'était {pk.nom(espece)} !", lignes,
+    return carte(f"C'était {promo.nom(espece)} !", lignes,
                  "calme" if trouve else "devoir",
                  sous_titre=f"n°{espece}"
-                 + (f" · {pk.genre(espece)}" if pk.genre(espece) else ""),
+                 + (f" · {promo.genre(espece)}" if promo.genre(espece) else ""),
                  image=fichier, boutons=boutons), ([fichier] if fichier else [])
 
 
 async def vue_quiz_classement(moi=None):
     """Le classement : le podium, la liste, et ce que pese la promo."""
-    rangs = await asyncio.to_thread(pk.classement, 10)
-    parties = pk.total_joue()
+    rangs = await asyncio.to_thread(promo.classement_pokemon, 10)
+    parties = promo.total_joue()
     fichier, souci = await _rendu(
-        lambda chemin: img.rendre_classement_pokemon(
+        lambda chemin: image.rendre_classement_pokemon(
             rangs, chemin, moi=moi, parties=parties),
         nom="quiz-classement")
 
     lignes = []
     if moi is not None:
-        f = await asyncio.to_thread(pk.fiche, moi)
+        f = await asyncio.to_thread(promo.fiche, moi)
         if f.get("tentatives"):
             lignes.append(
                 f"**Toi** : {f['points']} pts · {f['bonnes']}/{f['tentatives']} "
@@ -1602,7 +1586,7 @@ async def vue_quiz_classement(moi=None):
     boutons = [_b("Nouvelle question", "quiz", "neuf", style="vert", emoji="🎲"),
                _b("Actualiser", "quiz", "classement", emoji="🔄")]
     if fichier is None:
-        lignes += pk.bloc_classement(10)
+        lignes += promo.bloc_classement(10)
         return carte("Qui est ce Pokémon ? — le classement", lignes, "info",
                      boutons=boutons, pied=souci), []
     return carte("Qui est ce Pokémon ? — le classement", lignes, "info",
@@ -1634,7 +1618,7 @@ async def _jouer(inter, quiz_id, choix=None, tape=None):
     reponse est revelee : sinon le premier clic afficherait le resultat a tout
     le monde.
     """
-    quiz = await asyncio.to_thread(pk.par_id, quiz_id)
+    quiz = await asyncio.to_thread(promo.par_id, quiz_id)
     numero = None
     if quiz is not None and choix is not None:
         try:
@@ -1643,7 +1627,7 @@ async def _jouer(inter, quiz_id, choix=None, tape=None):
             numero = None
 
     etat, quiz, points = await asyncio.to_thread(
-        pk.repondre, quiz_id, inter.user.id, inter.user.display_name,
+        promo.repondre, quiz_id, inter.user.id, inter.user.display_name,
         numero, tape)
 
     if etat == "inconnu":
@@ -1659,13 +1643,13 @@ async def _jouer(inter, quiz_id, choix=None, tape=None):
     if etat == "clos":
         await inter.response.send_message(
             f"Trop tard, la réponse est déjà tombée : c'était **"
-            f"{pk.nom(quiz.get('espece', 0))}**.", ephemeral=True)
+            f"{promo.nom(quiz.get('espece', 0))}**.", ephemeral=True)
         return
 
     if etat == "juste":
-        f = await asyncio.to_thread(pk.fiche, inter.user.id)
+        f = await asyncio.to_thread(promo.fiche, inter.user.id)
         mot = f"✅ **Bien vu !** +{points} pts."
-        if f.get("serie", 0) >= pk.SERIE_MINIMUM:
+        if f.get("serie", 0) >= promo.SERIE_MINIMUM:
             mot += f" 🔥 **{f['serie']} d'affilée.**"
         mot += f"\n-# Total : {f.get('points', 0)} pts."
     else:
@@ -1685,7 +1669,7 @@ async def _reveler(quiz_id, inter=None, message=None):
     c'est ce qui permet de reveler une question posee il y a trois minutes,
     meme si le bot a redemarre entre-temps.
     """
-    quiz = await asyncio.to_thread(pk.reveler, quiz_id)
+    quiz = await asyncio.to_thread(promo.reveler, quiz_id)
     if quiz is None:
         return
     vue_, fichiers = await vue_quiz_reponse(quiz)
@@ -1718,7 +1702,7 @@ async def _tic_quiz(maintenant):
 
     Sans ca, une question que personne ne trouve resterait ouverte pour
     toujours, et son classement ne bougerait jamais."""
-    for quiz in await asyncio.to_thread(pk.a_reveler, maintenant):
+    for quiz in await asyncio.to_thread(promo.a_reveler, maintenant):
         await _reveler(quiz["id"])
 
 
@@ -1737,7 +1721,7 @@ async def _tic_quiz_du_jour(maintenant):
     if config.QUIZ_JOURS and maintenant.weekday() not in config.QUIZ_JOURS:
         return
     cle = f"quiz:{maintenant.date()}"
-    moment = vue.a_heure(maintenant.date(), config.QUIZ_HEURE, (18, 0))
+    moment = affichage.a_heure(maintenant.date(), config.QUIZ_HEURE, (18, 0))
     if _deja(cle) or not assistant._du(moment, maintenant, fenetre_min=10):
         return
 
@@ -1747,9 +1731,9 @@ async def _tic_quiz_du_jour(maintenant):
     vue_, fichiers = await vue_quiz(config.QUIZ_GENERATION, salon_id)
     salon = await _salon(salon_id)
     message = await salon.send(view=vue_, files=fichiers)
-    recent = (await asyncio.to_thread(pk.lire)).get("quiz") or [{}]
+    recent = (await asyncio.to_thread(promo.lire_pokemon)).get("quiz") or [{}]
     if recent[0].get("id"):
-        await asyncio.to_thread(pk.retenir_message, recent[0]["id"], message.id,
+        await asyncio.to_thread(promo.retenir_message, recent[0]["id"], message.id,
                                 salon_id)
     print(f"{maintenant:%H:%M} | quiz Pokémon du jour posté", flush=True)
 
@@ -1764,16 +1748,16 @@ async def vue_paris_assistant():
     """
     cours, liste_devoirs = await _donnees()
     auj = date.today()
-    cette = celcat.semaine_de(auj)
+    cette = edt.semaine_de(auj)
     paris = []                       # (emoji, titre, texte, probabilite)
 
     # Le cours qui va bouger : celui qui a le plus bouge ces 30 derniers jours.
-    historique = await asyncio.to_thread(actu.historique, 30)
+    historique = await asyncio.to_thread(edt.historique_actu, 30)
     compte = {}
     for ch in historique:
         c = ch.apres or ch.avant
         if c is not None:
-            nom = stats.nom_matiere(c)
+            nom = edt.nom_matiere(c)
             compte[nom] = compte.get(nom, 0) + 1
     if compte:
         nom, n = max(compte.items(), key=lambda kv: kv[1])
@@ -1789,12 +1773,12 @@ async def vue_paris_assistant():
     # Dans un fil, comme partout ailleurs : ce calcul parcourt tout l'emploi
     # du temps, et une boucle asyncio bloquee, c'est un bot qui ne repond plus
     # a personne — y compris aux boutons des autres.
-    s = await asyncio.to_thread(stats.semaine, cours, cette)
+    s = await asyncio.to_thread(edt.semaine, cours, cette)
     plein = s.jour_plein
     if plein:
-        texte = f"**{vue.jour_fr(plein.jour)}** — {vue.duree_fr(plein.minutes)} de cours"
+        texte = f"**{affichage.jour_fr(plein.jour)}** — {affichage.duree_fr(plein.minutes)} de cours"
         if plein.trous_minutes:
-            texte += f", {vue.duree_fr(plein.trous_minutes)} de trous"
+            texte += f", {affichage.duree_fr(plein.trous_minutes)} de trous"
         paris.append(("🫠", "Le jour où tu vas craquer", texte, min(0.95, plein.minutes / 600)))
 
     # Le parapluie : le jour le plus arrose des quatre a venir.
@@ -1802,7 +1786,7 @@ async def vue_paris_assistant():
         def meteo_():
             pire = None
             for n in range(4):
-                j = meteo.jour(auj + timedelta(days=n))
+                j = edt.jour(auj + timedelta(days=n))
                 if j and (pire is None or j.probabilite > pire[1].probabilite):
                     pire = (auj + timedelta(days=n), j)
             return pire
@@ -1810,14 +1794,14 @@ async def vue_paris_assistant():
         if pire:
             jour_, j = pire
             paris.append(("☔", "Le jour du parapluie",
-                          f"**{vue.jour_relatif(jour_).capitalize()}** — {j.texte}, "
+                          f"**{affichage.jour_relatif(jour_).capitalize()}** — {j.texte}, "
                           f"{j.probabilite} % de pluie", max(0.05, j.probabilite / 100)))
 
     # Le devoir rendu a la derniere minute : le plus proche.
-    restants = dv.actifs(liste_devoirs)
+    restants = promo.actifs(liste_devoirs)
     if restants:
         d = restants[0]
-        r = dv.jours_restants(d)
+        r = promo.jours_restants(d)
         texte = f"**{d['titre']}**" + (f" · {d['matiere']}" if d.get("matiere") else "")
         paris.append(("⏰", "Le devoir rendu à la dernière minute",
                       f"{texte} — {_quand_devoir(d)[0]}",
@@ -1829,8 +1813,8 @@ async def vue_paris_assistant():
         j, a, b = max(trous, key=lambda t: t[2] - t[1])
         minutes = (b - a).total_seconds() / 60
         paris.append(("🛋️", "Le trou qui finira en sieste",
-                      f"**{vue.jour_fr(j.jour, court=True)} {a:%H:%M}–{b:%H:%M}** — "
-                      f"{vue.duree_fr(minutes)} à tuer", min(0.9, minutes / 240)))
+                      f"**{affichage.jour_fr(j.jour, court=True)} {a:%H:%M}–{b:%H:%M}** — "
+                      f"{affichage.duree_fr(minutes)} à tuer", min(0.9, minutes / 240)))
 
     lignes = []
     for emoji, titre, texte, p in paris:
@@ -1851,12 +1835,12 @@ async def vue_paris_assistant():
 
 # --- Vos predictions : le jeu ------------------------------------------------
 def _texte_prediction(p):
-    ech = pr.echeance_date(p)
+    ech = promo.echeance_date(p)
     details = []
-    if pr.en_retard(p):
+    if promo.en_retard(p):
         details.append("⏰ échéance dépassée — à trancher")
     elif ech:
-        details.append(f"d'ici le {vue.jour_fr(ech, court=True)}")
+        details.append(f"d'ici le {affichage.jour_fr(ech, court=True)}")
     elif p.get("echeance_texte"):
         details.append(f"d'ici « {p['echeance_texte']} »")
     if p.get("mise"):
@@ -1864,7 +1848,7 @@ def _texte_prediction(p):
     texte = f"**#{p['id']} · {p['auteur']}** — « {p['texte']} »"
     if details:
         texte += "\n-# " + " · ".join(details)
-    pour, contre = pr.noms(p, "oui"), pr.noms(p, "non")
+    pour, contre = promo.noms(p, "oui"), promo.noms(p, "non")
     if pour or contre:
         texte += "\n-# " + " · ".join(x for x in (f"👍 {pour}" if pour else "",
                                                   f"👎 {contre}" if contre else "") if x)
@@ -1876,11 +1860,11 @@ def _texte_prediction(p):
 async def vue_predictions(page=0):
     """Les predictions en jeu : deux boutons de vote par ligne, un menu pour
     trancher ou supprimer (l'auteur seulement), et de quoi en poser une."""
-    liste = await asyncio.to_thread(pr.lire)
-    en_jeu = pr.ouvertes(liste)
+    liste = await asyncio.to_thread(promo.lire_predictions)
+    en_jeu = promo.ouvertes(liste)
     # Celles a trancher d'abord, puis les plus recentes.
-    en_jeu.sort(key=lambda p: (not pr.en_retard(p), -int(p.get("id", 0))))
-    _, _, chiffres = pr.classement(liste)
+    en_jeu.sort(key=lambda p: (not promo.en_retard(p), -int(p.get("id", 0))))
+    _, _, chiffres = promo.classement_predictions(liste)
     pages = max(1, -(-len(en_jeu) // PREDICTIONS_PAR_PAGE))
     page = max(0, min(int(page), pages - 1))
 
@@ -1893,8 +1877,8 @@ async def vue_predictions(page=0):
 
     composants, options = [], []
     for p in en_jeu[page * PREDICTIONS_PAR_PAGE:(page + 1) * PREDICTIONS_PAR_PAGE]:
-        oui, non = pr.comptes(p)
-        composants.append(discord.ui.TextDisplay(_texte_prediction(p)[:ui.TEXTE_MAX]))
+        oui, non = promo.comptes(p)
+        composants.append(discord.ui.TextDisplay(_texte_prediction(p)[:affichage.TEXTE_MAX]))
         rangee = discord.ui.ActionRow()
         rangee.add_item(BoutonCyu(_b(f"Oui ({oui})", "pred", "oui", p["id"], page,
                                      style="vert", emoji="👍")))
@@ -1919,30 +1903,30 @@ async def vue_predictions(page=0):
     if pages > 1:
         actions.append([_b("◀", "pred", "page", page - 1, inactif=page == 0),
                         _b("▶", "pred", "page", page + 1, inactif=page >= pages - 1)])
-    menus = [ui.Menu("predsel", "Trancher ou supprimer une prédiction (l'auteur seulement)…",
-                     options[:25])] if options else []
-    teinte = "devoir" if any(pr.en_retard(p) for p in en_jeu) else "info"
+    menus = [affichage.Menu("predsel", "Trancher ou supprimer une prédiction (l'auteur seulement)…",
+                            options[:25])] if options else []
+    teinte = "devoir" if any(promo.en_retard(p) for p in en_jeu) else "info"
     return carte_composee("Prédictions", composants, teinte, sous_titre=sous,
                           boutons=actions, menus=menus,
                           pied="c'est vous qui pariez, l'auteur tranche"), []
 
 
 async def vue_predictions_closes():
-    liste = await asyncio.to_thread(pr.lire)
-    closes = pr.closes(liste)
+    liste = await asyncio.to_thread(promo.lire_predictions)
+    closes = promo.closes(liste)
     boutons = [_b("En jeu", "pred", "page", 0, style="bleu", emoji="🔮"),
                _b("Classement", "pred", "classement", emoji="🏆")]
     if not closes:
         return carte("Prédictions tranchées", ["Aucune pour l'instant : les paris "
-                                                "sont encore ouverts."], "calme",
+                                               "sont encore ouverts."], "calme",
                      boutons=boutons), []
     lignes = []
     for p in closes[:12]:
-        oui, non = pr.comptes(p)
-        justes = pr.noms(p, p["resultat"])
+        oui, non = promo.comptes(p)
+        justes = promo.noms(p, p["resultat"])
         quand = str(p.get("tranche_le", ""))[:10]
         try:
-            quand = vue.jour_fr(date.fromisoformat(quand), court=True)
+            quand = affichage.jour_fr(date.fromisoformat(quand), court=True)
         except ValueError:
             pass
         lignes.append(f"{'✅' if p['resultat'] == 'oui' else '❌'} **#{p['id']} · "
@@ -1956,19 +1940,19 @@ async def vue_predictions_closes():
     # la liste et dans le classement pour toujours, y compris quand elle avait
     # ete posee ou tranchee par erreur. « closes » ramene ici apres le clic,
     # plutot que sur la liste des paris en cours.
-    menus = [ui.Menu("predsel", "Supprimer une prédiction tranchée (l'auteur seulement)…",
-                     [(f"🗑 #{p['id']} — {p['texte']}"[:100], f"suppr:{p['id']}",
-                       f"{'✅ réalisée' if p['resultat'] == 'oui' else '❌ ratée'}"
-                       f" · par {p['auteur']}"[:100], None)
-                      for p in closes[:25]], args=("closes",))]
+    menus = [affichage.Menu("predsel", "Supprimer une prédiction tranchée (l'auteur seulement)…",
+                            [(f"🗑 #{p['id']} — {p['texte']}"[:100], f"suppr:{p['id']}",
+                              f"{'✅ réalisée' if p['resultat'] == 'oui' else '❌ ratée'}"
+                              f" · par {p['auteur']}"[:100], None)
+                             for p in closes[:25]], args=("closes",))]
     return carte("Prédictions tranchées", lignes, "info",
                  sous_titre=f"{len(closes)} au total", boutons=boutons,
                  menus=menus), []
 
 
 async def vue_classement():
-    liste = await asyncio.to_thread(pr.lire)
-    prophetes, parieurs, chiffres = pr.classement(liste)
+    liste = await asyncio.to_thread(promo.lire_predictions)
+    prophetes, parieurs, chiffres = promo.classement_predictions(liste)
     boutons = [_b("En jeu", "pred", "page", 0, style="bleu", emoji="🔮"),
                _b("Tranchées", "pred", "closes", emoji="📜")]
     if not chiffres["tranchees"]:
@@ -2001,19 +1985,19 @@ async def vue_prediction_seule(ident):
     """UNE prediction, comme un sondage : sa carte a elle, ses boutons de
     vote, reecrite sur place a chaque clic. C'est ce que /parier poste dans
     #predictions, et ce qui reste quand elle est tranchee."""
-    liste = await asyncio.to_thread(pr.lire)
-    p = pr.trouver(liste, ident)
+    liste = await asyncio.to_thread(promo.lire_predictions)
+    p = promo.trouver(liste, ident)
     if p is None:
-        return ui.erreur(f"La prédiction #{ident} n'existe plus.", "Introuvable"), []
-    oui, non = pr.comptes(p)
-    ech = pr.echeance_date(p)
+        return affichage.erreur(f"La prédiction #{ident} n'existe plus.", "Introuvable"), []
+    oui, non = promo.comptes(p)
+    ech = promo.echeance_date(p)
     sous = [f"par **{p['auteur']}**"]
     try:
         sous.append(f"posée le {date.fromisoformat(str(p.get('cree_le', ''))[:10]):%d/%m}")
     except ValueError:
         pass
     if ech:
-        sous.append(f"d'ici le {vue.jour_fr(ech, court=True)}")
+        sous.append(f"d'ici le {affichage.jour_fr(ech, court=True)}")
     elif p.get("echeance_texte"):
         sous.append(f"d'ici « {p['echeance_texte']} »")
     if p.get("mise"):
@@ -2021,23 +2005,23 @@ async def vue_prediction_seule(ident):
 
     lignes = [f"### « {p['texte']} »", ""]
     if oui or non:
-        lignes += [f"👍 **{oui}** — {pr.noms(p, 'oui', 6) or '—'}",
-                   f"👎 **{non}** — {pr.noms(p, 'non', 6) or '—'}",
+        lignes += [f"👍 **{oui}** — {promo.noms(p, 'oui', 6) or '—'}",
+                   f"👎 **{non}** — {promo.noms(p, 'non', 6) or '—'}",
                    f"-# {_barre_votes(oui, non)}"]
     else:
         lignes.append("-# personne n'a encore voté — à toi")
 
     resultat = p.get("resultat")
     if resultat:
-        justes = pr.noms(p, resultat, 8)
+        justes = promo.noms(p, resultat, 8)
         quand = str(p.get("tranche_le", ""))[:10]
         try:
             quand = f"le {date.fromisoformat(quand):%d/%m}"
         except ValueError:
             quand = ""
         lignes += ["", f"**Tranchée {quand} par {p['auteur']}** — "
-                       + (f"avaient raison : {justes}" if justes
-                          else "personne n'avait misé du bon côté")]
+                   + (f"avaient raison : {justes}" if justes
+                      else "personne n'avait misé du bon côté")]
         titre = ("✅ Réalisée" if resultat == "oui" else "❌ Ratée") + f" — prédiction #{p['id']}"
         boutons = [[_b("Toutes les prédictions", "pred", "page", 0, emoji="🔮"),
                     _b("Classement", "pred", "classement", emoji="🏆"),
@@ -2045,7 +2029,7 @@ async def vue_prediction_seule(ident):
         teinte = "cours" if resultat == "oui" else "alerte"
         pied = "tranchée : les votes sont figés"
     else:
-        if pr.en_retard(p):
+        if promo.en_retard(p):
             lignes += ["", f"⏰ **L'échéance est passée** — {p['auteur']}, tranche : ✔️ ou ✖️"]
         titre = f"🔮 Prédiction #{p['id']}"
         boutons = [[_b(f"Oui ({oui})", "pred", "oui", p["id"], "solo", style="vert", emoji="👍"),
@@ -2055,7 +2039,7 @@ async def vue_prediction_seule(ident):
                    [_b("Toutes les prédictions", "pred", "page", 0, emoji="🔮"),
                     _b("Classement", "pred", "classement", emoji="🏆"),
                     _b("Parier", "pred", "ajout", style="vert", emoji="🎲")]]
-        teinte = "devoir" if pr.en_retard(p) else "info"
+        teinte = "devoir" if promo.en_retard(p) else "info"
         pied = "tout le monde vote, seul l'auteur tranche (✔️ ✖️)"
     return carte(titre, lignes, teinte, sous_titre=" · ".join(sous),
                  boutons=boutons, pied=pied), []
@@ -2107,7 +2091,7 @@ async def _apres_tranchage(p, etat, inter):
     if not salon_id or (inter.channel is not None and inter.channel.id == salon_id):
         return
     realisee = p.get("resultat") == "oui"
-    justes = pr.noms(p, p.get("resultat"), 8)
+    justes = promo.noms(p, p.get("resultat"), 8)
     # Le pari est DEJA tranche a ce stade : tout ce qui suit n'est que
     # l'annonce. Si le salon #predictions a disparu, si le bot n'y a plus
     # acces, ou si Discord refuse, on le note dans la console et on s'arrete
@@ -2132,9 +2116,9 @@ async def _apres_tranchage(p, etat, inter):
 def vue_recap_predictions(liste):
     """Le point du dimanche dans #predictions. Rend (carte, [auteurs a
     mentionner]) : ceux qui ont une prediction a trancher."""
-    ouvertes = pr.ouvertes(liste)
-    retard = [p for p in ouvertes if pr.en_retard(p)]
-    prophetes, parieurs, chiffres = pr.classement(liste)
+    ouvertes = promo.ouvertes(liste)
+    retard = [p for p in ouvertes if promo.en_retard(p)]
+    prophetes, parieurs, chiffres = promo.classement_predictions(liste)
     lignes, mentions = [], []
     if retard:
         lignes += ["### ⏰ À trancher",
@@ -2145,8 +2129,8 @@ def vue_recap_predictions(liste):
         lignes.append("")
     if ouvertes:
         lignes.append(f"### 🔮 {len(ouvertes)} en jeu")
-        for p in sorted(ouvertes, key=lambda p: -sum(pr.comptes(p)))[:5]:
-            oui, non = pr.comptes(p)
+        for p in sorted(ouvertes, key=lambda p: -sum(promo.comptes(p)))[:5]:
+            oui, non = promo.comptes(p)
             lignes.append(f"• « {p['texte'][:80]} » — {p['auteur']} · 👍 {oui} · 👎 {non}")
         lignes.append("")
     if prophetes or parieurs:
@@ -2191,10 +2175,10 @@ class ModalePrediction(discord.ui.Modal, title="Une prédiction"):
         if pour:
             cours, _ = await _donnees()
             try:
-                echeance = dv.resoudre_echeance(pour, cours, "") or ""
+                echeance = promo.resoudre_echeance(pour, cours, "") or ""
             except ValueError:
                 echeance_texte = pour        # « la fin de l'annee » : on garde tel quel
-        p = await asyncio.to_thread(pr.ajouter, texte, inter.user.id,
+        p = await asyncio.to_thread(promo.ajouter_predictions, texte, inter.user.id,
                                     inter.user.display_name, echeance, echeance_texte, mise)
         # Publique, et sur sa propre carte : une prediction est faite pour
         # etre vue et votee, comme un sondage.
@@ -2206,14 +2190,14 @@ async def creer_sondage(inter, question, texte_reponses, heures, plusieurs):
     """Un vrai sondage Discord, envoye en reponse a l'interaction, et retenu
     pour en annoncer le resultat a la fin (voir _tic_sondages)."""
     try:
-        sondage = sd.construire(question, texte_reponses, heures, plusieurs)
+        sondage = promo.construire(question, texte_reponses, heures, plusieurs)
     except ValueError as e:
-        await inter.response.send_message(view=ui.erreur(str(e), "Sondage impossible"),
+        await inter.response.send_message(view=affichage.erreur(str(e), "Sondage impossible"),
                                           ephemeral=True)
         return
     heures = min(768, max(1, int(heures or config.SONDAGE_DUREE_HEURES)))
     fin = datetime.now() + timedelta(hours=heures)
-    contenu = (f"📊 **Sondage** de {inter.user.mention} · {sd.duree_texte(heures)}, "
+    contenu = (f"📊 **Sondage** de {inter.user.mention} · {promo.duree_texte(heures)}, "
                f"se termine {discord.utils.format_dt(fin, 'R')}"
                + (" · plusieurs réponses possibles" if plusieurs else ""))
     # Un sondage ne peut pas voyager dans une carte (regle Discord) : c'est un
@@ -2224,14 +2208,14 @@ async def creer_sondage(inter, question, texte_reponses, heures, plusieurs):
         message = await inter.original_response()
     except discord.HTTPException:
         return
-    await asyncio.to_thread(sd.suivre, message.id, inter.channel_id, fin,
+    await asyncio.to_thread(promo.suivre, message.id, inter.channel_id, fin,
                             sondage.question, inter.user.id)
 
 
 class ModaleSondage(discord.ui.Modal, title="Un sondage"):
     question = discord.ui.Label(
         text="La question",
-        component=discord.ui.TextInput(max_length=sd.QUESTION_MAX,
+        component=discord.ui.TextInput(max_length=promo.QUESTION_MAX,
                                        placeholder="On mange où jeudi ?"))
     reponses = discord.ui.Label(
         text="Les réponses",
@@ -2244,7 +2228,7 @@ class ModaleSondage(discord.ui.Modal, title="Un sondage"):
         component=discord.ui.Select(
             options=[discord.SelectOption(label=nom, value=str(h),
                                           default=h == config.SONDAGE_DUREE_HEURES)
-                     for nom, h in sd.DUREES],
+                     for nom, h in promo.DUREES],
             min_values=0, max_values=1, required=False))
     plusieurs = discord.ui.Label(
         text="Plusieurs réponses par personne ?",
@@ -2264,21 +2248,21 @@ class ModaleSondage(discord.ui.Modal, title="Un sondage"):
 async def poser_rappel(inter, quand, texte, qui="moi"):
     cours, _ = await _donnees()
     try:
-        moment = rp.lire_moment(quand, cours)
+        moment = promo.lire_moment(quand, cours)
     except ValueError as e:
-        await inter.response.send_message(view=ui.erreur(str(e), "Quand ?"), ephemeral=True)
+        await inter.response.send_message(view=affichage.erreur(str(e), "Quand ?"), ephemeral=True)
         return
     texte = str(texte or "").strip()
     if not texte:
         await inter.response.send_message(
-            view=ui.erreur("Un rappel de quoi ? Il manque le texte."), ephemeral=True)
+            view=affichage.erreur("Un rappel de quoi ? Il manque le texte."), ephemeral=True)
         return
     salon_id = inter.channel_id
-    r = await asyncio.to_thread(rp.ajouter, texte, moment, inter.user.id,
+    r = await asyncio.to_thread(promo.ajouter_rappels, texte, moment, inter.user.id,
                                 inter.user.display_name, salon_id, qui)
     lignes = [f"**{texte}**",
-              f"-# {vue.jour_fr(moment.date())} à **{moment:%H:%M}** · "
-              f"{vue.compte_a_rebours(moment)} · "
+              f"-# {affichage.jour_fr(moment.date())} à **{moment:%H:%M}** · "
+              f"{affichage.compte_a_rebours(moment)} · "
               + ("tout le salon sera prévenu (@here)" if qui == "here"
                  else "toi seul seras mentionné")]
     # Un rappel pour tout le monde s'annonce a tout le monde ; le tien ne
@@ -2291,7 +2275,7 @@ async def poser_rappel(inter, quand, texte, qui="moi"):
 
 
 async def vue_rappels(user_id, nom=""):
-    liste = await asyncio.to_thread(rp.de, user_id)
+    liste = await asyncio.to_thread(promo.de, user_id)
     boutons = [_b("Nouveau rappel", "rap", "ajout", style="vert", emoji="⏰"),
                _b("Actualiser", "rap", "liste", emoji="🔄")]
     if not liste:
@@ -2301,14 +2285,14 @@ async def vue_rappels(user_id, nom=""):
                      "calme", boutons=boutons), []
     lignes, options = [], []
     for r in liste[:15]:
-        q = rp.quand(r)
-        quand = (f"{vue.jour_fr(q.date(), court=True)} {q:%H:%M} · {vue.compte_a_rebours(q)}"
+        q = promo.quand(r)
+        quand = (f"{affichage.jour_fr(q.date(), court=True)} {q:%H:%M} · {affichage.compte_a_rebours(q)}"
                  if q else "?")
         ou = f" · <#{r['salon_id']}>" if str(r.get("salon_id", "")).isdigit() else ""
         qui = " · @here" if r.get("qui") == "here" else ""
         lignes.append(f"⏰ **{r['texte']}**\n-# #{r['id']} · {quand}{ou}{qui}")
         options.append((f"#{r['id']} {r['texte']}"[:100], str(r["id"]), quand[:100], "🗑️"))
-    menu = ui.Menu("rapsel", "Annuler un rappel…", options[:25])
+    menu = affichage.Menu("rapsel", "Annuler un rappel…", options[:25])
     return carte("Tes rappels", lignes, "devoir",
                  sous_titre=f"{len(liste)} en attente" + (f" — {nom}" if nom else ""),
                  boutons=boutons, menus=[menu], pied="toi seul vois cette liste"), []
@@ -2338,9 +2322,9 @@ class ModaleRappel(discord.ui.Modal, title="Un rappel"):
 
 # --- Les anniversaires -------------------------------------------------------
 async def vue_anniversaires(user_id=None):
-    data = await asyncio.to_thread(an.lire)
+    data = await asyncio.to_thread(promo.lire_anniversaires)
     auj = date.today()
-    liste = an.prochains(12, auj, data)
+    liste = promo.prochains(12, auj, data)
     boutons = [_b("Ajouter le mien", "anniv", "ajout", style="vert", emoji="🎂")]
     if user_id is not None and str(user_id) in data:
         boutons.append(_b("Retirer le mien", "anniv", "retirer", emoji="🗑️"))
@@ -2355,10 +2339,10 @@ async def vue_anniversaires(user_id=None):
     lignes = []
     for d, uid, e in liste:
         ecart = (d - auj).days
-        age = an.age_le(e, d)
+        age = promo.age_le(e, d)
         quand = ("**AUJOURD'HUI** 🎉" if ecart == 0 else "**demain**" if ecart == 1
                  else f"dans {ecart} j")
-        lignes.append(f"🎂 **{e['nom']}** — {an.libelle(e)} · {quand}"
+        lignes.append(f"🎂 **{e['nom']}** — {promo.libelle(e)} · {quand}"
                       + (f" · {age} ans" if age else ""))
     return carte("Anniversaires", lignes, "info",
                  sous_titre=f"{len(data)} dans la promo · les prochains",
@@ -2367,18 +2351,18 @@ async def vue_anniversaires(user_id=None):
 
 async def definir_anniversaire(inter, texte):
     try:
-        jour, mois, annee = an.lire_date(texte)
+        jour, mois, annee = promo.lire_date(texte)
     except ValueError as e:
-        await inter.response.send_message(view=ui.erreur(str(e), "Date incomprise"),
+        await inter.response.send_message(view=affichage.erreur(str(e), "Date incomprise"),
                                           ephemeral=True)
         return
-    e = await asyncio.to_thread(an.definir, inter.user.id, inter.user.display_name,
+    e = await asyncio.to_thread(promo.definir, inter.user.id, inter.user.display_name,
                                 jour, mois, annee)
-    d = an.prochaine_date(e)
+    d = promo.prochaine_date(e)
     ecart = (d - date.today()).days
-    age = an.age_le(e, d)
+    age = promo.age_le(e, d)
     quand = "c'est aujourd'hui ! 🎉" if ecart == 0 else f"dans {ecart} jour{'s' if ecart > 1 else ''}"
-    lignes = [f"**{e['nom']}** — {an.libelle(e)}, {quand}" + (f" ({age} ans)" if age else "")]
+    lignes = [f"**{e['nom']}** — {promo.libelle(e)}, {quand}" + (f" ({age} ans)" if age else "")]
     if config.ANNIVERSAIRES:
         lignes.append(f"-# Le bot le souhaitera à {config.ANNIVERSAIRES_HEURE} dans #annonces.")
     await inter.response.send_message(view=carte(
@@ -2418,9 +2402,9 @@ async def synchroniser_evenements(serveur):
     Rend (crees, mis_a_jour, retires). Leve discord.Forbidden si le bot n'a
     pas « Gerer les evenements »."""
     cours, liste_devoirs = await _donnees()
-    voulus = await asyncio.to_thread(ev.voulus, cours, liste_devoirs)
-    connus = await asyncio.to_thread(ev.lire)
-    a_creer, a_modifier, a_retirer = ev.plan(voulus, connus)
+    voulus = await asyncio.to_thread(promo.voulus, cours, liste_devoirs)
+    connus = await asyncio.to_thread(promo.lire_evenements)
+    a_creer, a_modifier, a_retirer = promo.plan(voulus, connus)
     crees = maj = retires = 0
 
     for cle in a_modifier:
@@ -2455,7 +2439,7 @@ async def synchroniser_evenements(serveur):
         connus.pop(cle, None)
         retires += 1
 
-    await asyncio.to_thread(ev.ecrire, connus)
+    await asyncio.to_thread(promo.ecrire_evenements, connus)
     return crees, maj, retires
 
 
@@ -2513,17 +2497,17 @@ async def _nettoyer(inter, args):
     """La confirmation de /clear a ete cliquee : on vide, ou on annule."""
     if args[:1] != ["go"]:
         await inter.response.edit_message(
-            view=ui.erreur("Rien n'a été supprimé.", "Annulé"), attachments=[])
+            view=affichage.erreur("Rien n'a été supprimé.", "Annulé"), attachments=[])
         return
     if not _peut_nettoyer(inter):
         await inter.response.edit_message(
-            view=ui.erreur(REFUS_CLEAR))
+            view=affichage.erreur(REFUS_CLEAR))
         return
     nombre = int(args[1]) if len(args) > 1 and args[1].isdigit() else 100
     nombre = max(1, min(nombre, CLEAR_MAX))
     manquants = _droits_manquants(inter)
     if manquants:
-        await inter.response.edit_message(view=ui.erreur(
+        await inter.response.edit_message(view=affichage.erreur(
             "Il manque au **bot** (pas à toi) : " + ", ".join(f"« {d} »" for d in manquants)
             + ".\n-# Paramètres du serveur → Rôles → le rôle du bot → Permissions. "
               "Si ce salon a ses propres permissions, c'est là qu'il faut regarder "
@@ -2532,7 +2516,7 @@ async def _nettoyer(inter, args):
         return
     await inter.response.defer()
     if not hasattr(inter.channel, "purge"):
-        await inter.edit_original_response(view=ui.erreur("Ce type de salon ne se vide pas."))
+        await inter.edit_original_response(view=affichage.erreur("Ce type de salon ne se vide pas."))
         return
     try:
         # Les epingles sont gardees, et le panneau aussi meme s'il n'est pas
@@ -2540,7 +2524,7 @@ async def _nettoyer(inter, args):
         supprimes = await inter.channel.purge(
             limit=nombre, check=lambda m: not m.pinned and not _est_panneau(m), bulk=True)
     except discord.Forbidden:
-        await inter.edit_original_response(view=ui.erreur(
+        await inter.edit_original_response(view=affichage.erreur(
             "Discord a refusé : le bot n'a pas le droit « Gérer les messages » ou "
             "« Lire l'historique des messages » dans ce salon."))
         return
@@ -2565,28 +2549,28 @@ async def vue_meteo(jours=0):
 
     cours, _ = await _donnees()
     quand = date.today() + timedelta(days=jours)
-    jc = [c for c in celcat.du_jour(cours, quand) if c.est_cours]
+    jc = [c for c in edt.du_jour(cours, quand) if c.est_cours]
 
     def travail():
-        resume = meteo.jour(quand)
+        resume = edt.jour(quand)
         if resume is None:
             return None, [], None, 0
         depart = None
         if jc and not jc[0].a_distance:
-            _, depart = vue.heure_lever(jc[0])
+            _, depart = affichage.heure_lever(jc[0])
         minuit = datetime.combine(quand, datetime.min.time())
-        creneaux = meteo.fenetre(depart or minuit.replace(hour=8),
-                                 jc[0].debut if jc else minuit.replace(hour=18))
-        return resume, creneaux, depart, meteo.marge_pluie(creneaux)
+        creneaux = edt.fenetre(depart or minuit.replace(hour=8),
+                               jc[0].debut if jc else minuit.replace(hour=18))
+        return resume, creneaux, depart, edt.marge_pluie(creneaux)
 
     resume, creneaux, depart, marge = await asyncio.to_thread(travail)
-    titre = f"Météo — {vue.jour_relatif(quand)}"
+    titre = f"Météo — {affichage.jour_relatif(quand)}"
     if resume is None:
         return carte(titre, ["Open-Meteo est injoignable, ou le jour demandé sort "
                              "de la prévision (quatre jours au maximum)."],
                      "calme", boutons=boutons), []
 
-    gene = meteo.pire(creneaux)
+    gene = edt.pire(creneaux)
     lignes = [f"### {resume.resume()}"]
     if resume.lever:
         lignes.append(f"🌅 lever du soleil {resume.lever} · coucher {resume.coucher}")
@@ -2601,14 +2585,14 @@ async def vue_meteo(jours=0):
             lignes.append("**Premier cours à distance** : pas de trajet.")
         if gene is not None:
             lignes.append(f"↳ {gene.resume()}")
-        phrase = meteo.conseil(creneaux)
+        phrase = edt.conseil(creneaux)
         if phrase:
             lignes.append(f"↳ **{phrase.capitalize()}.**")
     else:
         lignes.append("Aucun cours ce jour-là : la pluie ne te concerne pas. 🛋️")
 
-    age = meteo.age_minutes()
-    pied = f"Open-Meteo · bulletin lu il y a {vue.duree_fr(age)}" if age else "Open-Meteo"
+    age = edt.age_minutes()
+    pied = f"Open-Meteo · bulletin lu il y a {affichage.duree_fr(age)}" if age else "Open-Meteo"
     teinte = "alerte" if gene is not None and gene.mouille else "info"
     return carte(titre, lignes, teinte, sous_titre=f"à {config.METEO_LIEU}",
                  boutons=boutons, pied=pied), []
@@ -2620,9 +2604,9 @@ async def vue_libre(jours=7):
     cours, _ = await _donnees()
     boutons = [_b(f"{n} jours", "libre", n, style="bleu" if n == jours else "gris",
                   inactif=n == jours) for n in (7, 14, 31)]
-    return carte("Créneaux libres", vue.creneaux_libres(cours, jours=jours), "calme",
+    return carte("Créneaux libres", affichage.creneaux_libres(cours, jours=jours), "calme",
                  sous_titre=f"sur les {jours} prochains jours, au moins "
-                            f"{config.CRENEAU_LIBRE_MINUTES} min d'affilée",
+                 f"{config.CRENEAU_LIBRE_MINUTES} min d'affilée",
                  boutons=boutons), []
 
 
@@ -2634,7 +2618,7 @@ async def vue_statut():
     # lui qu'on ouvre quand quelque chose ne va pas. Une ligne qui echoue est
     # remplacee par son erreur, et le reste s'affiche quand meme.
     try:
-        lignes = list(await asyncio.to_thread(st.bloc, cours, liste_devoirs, DEMARRAGE))
+        lignes = list(await asyncio.to_thread(affichage.bloc, cours, liste_devoirs, DEMARRAGE))
     except Exception as e:                      # noqa: BLE001 - filet volontaire
         traceback.print_exc()
         lignes = [f"⚠️ le panneau d'état a échoué : `{type(e).__name__}: {e}`"[:300]]
@@ -2652,7 +2636,7 @@ async def vue_statut():
                       + f"\n-# {heure_lignes[-1]}")
     try:
         n_r, n_s, n_e, n_a = await asyncio.to_thread(
-            lambda: (len(rp.lire()), len(sd.lire()), len(ev.lire()), len(an.lire())))
+            lambda: (len(promo.lire_rappels()), len(promo.lire_sondages()), len(promo.lire_evenements()), len(promo.lire_anniversaires())))
         lignes.append(f"**La promo** — {n_r} rappel{_s(n_r)} en attente · {n_s} sondage"
                       f"{_s(n_s)} suivi{_s(n_s)} · {n_e} examen{_s(n_e)} en événements · "
                       f"{n_a} anniversaire{_s(n_a)} noté{_s(n_a)}"
@@ -2661,13 +2645,13 @@ async def vue_statut():
         lignes.append(f"**La promo** — ⚠️ `{type(e).__name__}: {e}`"[:300])
     lignes += ["", "**Les salons**"]
     for canal in config.CANAUX:
-        mode, cible = notif.destination(canal)
+        mode, cible = affichage.destination(canal)
         if canal in config.CANAUX_BOT_SEULEMENT:
             ou = (f"<#{cible}>" if config.salon_bot(canal)
                   else "— pas de salon dédié (les prédictions restent où on les pose)")
         else:
             ou = f"<#{cible}>" if mode == "bot" else "webhook"
-            if not notif.salon_configure(canal):
+            if not affichage.salon_configure(canal):
                 ou += " ⚠️ non configuré, retombe sur le secours"
         lignes.append(f"`{canal:11s}` {ou}")
     boutons = [_b("Relire CELCAT", "pan", "refresh", style="bleu", emoji="🔄"),
@@ -2679,10 +2663,10 @@ async def vue_statut():
 async def rafraichir():
     """Relire CELCAT et reecrire les deux tableaux vivants. Rend une carte."""
     def travail():
-        cours, origine = celcat.charger()
-        liste_devoirs = dv.lire()
-        st.publier(cours, liste_devoirs, DEMARRAGE)
-        st.publier_tableau_edt(cours, liste_devoirs)
+        cours, origine = edt.charger()
+        liste_devoirs = promo.lire_devoirs()
+        affichage.publier(cours, liste_devoirs, DEMARRAGE)
+        affichage.publier_tableau_edt(cours, liste_devoirs)
         return origine, len([c for c in cours if c.est_cours])
 
     origine, combien = await asyncio.to_thread(travail)
@@ -2699,10 +2683,10 @@ def vue_panneau():
              "naviguer.",
              "-# Tu peux aussi taper les commandes : `/edt` `/devoirs` `/stats` "
              "`/examens` `/ects` `/sondage` `/rappel` — et `/help` pour tout voir"]
-    menu = ui.Menu("jour", "Voir un jour de la semaine…",
-                   [(j.capitalize(), str(i), None, "📆") for i, j in enumerate(vue.JOURS)]
-                   + [("La semaine prochaine", "prochaine", None, "🗓️"),
-                      ("Dans deux semaines", "deux", None, "🗓️")])
+    menu = affichage.Menu("jour", "Voir un jour de la semaine…",
+                          [(j.capitalize(), str(i), None, "📆") for i, j in enumerate(affichage.JOURS)]
+                          + [("La semaine prochaine", "prochaine", None, "🗓️"),
+                             ("Dans deux semaines", "deux", None, "🗓️")])
     boutons = [
         [_b("Aujourd'hui", "pan", "auj", style="bleu", emoji="📆"),
          _b("Demain", "pan", "demain", emoji="🌙"),
@@ -2723,11 +2707,11 @@ def vue_panneau():
         # ne sait que s'excuser n'a rien a faire sur le panneau. Le calendrier
         # d'alternance suit la meme regle, et partage la rangee.
         ([_b("ECTS et coefficients", "pan", "ects", emoji="📘")]
-         if mq.disponible() else [])
+         if ecole.disponible_maquette() else [])
         + ([_b("Alternance", "pan", "alternance", emoji="🗓️")]
-           if alt.disponible() else [])
+           if ecole.disponible_alternance() else [])
         + ([_b("Quiz Pokémon", "pan", "quiz", emoji="🏆")]
-           if pk.disponible() else []),
+           if promo.disponible() else []),
         [_b("Rappel", "rap", "ajout", emoji="⏰"),
          _b("Mes rappels", "pan", "rappels", emoji="📋"),
          _b("Anniversaires", "pan", "anniv", emoji="🎂"),
@@ -2748,14 +2732,14 @@ def _jours_matin():
         return ""
     if jours == [0, 1, 2, 3, 4]:
         return " en semaine"
-    return " " + "/".join(vue.JOURS_COURTS[j] for j in jours)
+    return " " + "/".join(affichage.JOURS_COURTS[j] for j in jours)
 
 
 def texte_aide():
     """L'aide est construite depuis config.yaml, pas ecrite en dur : si tu
     changes l'heure d'un briefing, /help dit la nouvelle heure sans qu'on y
     touche."""
-    jour_recap = vue.JOURS[config.RECAP_SEMAINE_JOUR % 7]
+    jour_recap = affichage.JOURS[config.RECAP_SEMAINE_JOUR % 7]
     lignes = [
         "### Voir — tout sort en photo, avec des boutons pour naviguer",
         "`/edt` — **ta journée**. Avec une date : `/edt 12/10`, `/edt lundi`, "
@@ -2926,15 +2910,15 @@ class ModaleDevoir(discord.ui.Modal, title="Nouveau devoir"):
 
         cours, _ = await _donnees()
         try:
-            echeance = dv.resoudre_echeance(pour, cours, matiere)
+            echeance = promo.resoudre_echeance(pour, cours, matiere)
         except ValueError as e:
             await inter.response.send_message(
-                view=ui.erreur(f"{e}\n-# Essaie `demain`, `lundi`, `12/10`, `+3` "
-                               f"ou `prochain:{matiere or 'maths'}`.",
-                               "Date incomprise"), ephemeral=True)
+                view=affichage.erreur(f"{e}\n-# Essaie `demain`, `lundi`, `12/10`, `+3` "
+                                      f"ou `prochain:{matiere or 'maths'}`.",
+                                      "Date incomprise"), ephemeral=True)
             return
-        d = await asyncio.to_thread(dv.ajouter, titre, matiere, echeance, type_, note)
-        restants = len(dv.actifs())
+        d = await asyncio.to_thread(promo.ajouter_devoirs, titre, matiere, echeance, type_, note)
+        restants = len(promo.actifs())
         await inter.response.send_message(
             view=carte("Devoir ajouté", [_texte_devoir(d)], "devoir",
                        sous_titre=f"{restants} en attente",
@@ -3041,16 +3025,16 @@ async def _vue_panneau(args, valeurs, inter=None):
     if quoi == "demain":
         return await vue_jour(auj + timedelta(days=1))
     if quoi == "semaine":
-        lundi = celcat.semaine_de(auj)
+        lundi = edt.semaine_de(auj)
         return await vue_grille(lundi, lundi + timedelta(days=6))
     if quoi == "prochaine":
-        lundi = celcat.semaine_de(auj) + timedelta(days=7)
+        lundi = edt.semaine_de(auj) + timedelta(days=7)
         return await vue_grille(lundi, lundi + timedelta(days=6))
     if quoi == "deux":
-        lundi = celcat.semaine_de(auj) + timedelta(days=14)
+        lundi = edt.semaine_de(auj) + timedelta(days=14)
         return await vue_grille(lundi, lundi + timedelta(days=6))
     if quoi.isdigit():                      # un jour de la semaine, 0 = lundi
-        return await vue_jour(celcat.semaine_de(auj) + timedelta(days=int(quoi)))
+        return await vue_jour(edt.semaine_de(auj) + timedelta(days=int(quoi)))
     if quoi == "prochain":
         return await vue_prochain()
     if quoi == "actu":
@@ -3058,7 +3042,7 @@ async def _vue_panneau(args, valeurs, inter=None):
     if quoi == "devoirs":
         return await vue_devoirs(0)
     if quoi == "stats":
-        return await vue_stats(celcat.semaine_de(auj))
+        return await vue_stats(edt.semaine_de(auj))
     if quoi == "meteo":
         return await vue_meteo(0)
     if quoi == "libre":
@@ -3072,7 +3056,7 @@ async def _vue_panneau(args, valeurs, inter=None):
     if quoi == "quiz":
         return await vue_quiz_classement(inter.user.id if inter is not None else None)
     if quoi == "comparer":
-        return await vue_comparer(celcat.semaine_de(auj))
+        return await vue_comparer(edt.semaine_de(auj))
     if quoi == "prediction":
         return await vue_predictions(0)
     if quoi == "anniv":
@@ -3088,7 +3072,7 @@ async def _vue_panneau(args, valeurs, inter=None):
         return vue_aide(), []
     if quoi == "panneau":
         return vue_panneau(), []
-    return ui.erreur(f"action inconnue : `{quoi}`"), []
+    return affichage.erreur(f"action inconnue : `{quoi}`"), []
 
 
 async def _vue_navigation(action, args, valeurs, inter=None):
@@ -3143,9 +3127,9 @@ async def _vue_navigation(action, args, valeurs, inter=None):
             # La carte remplace le message qui portait le bouton : c'est donc
             # CE message-la que la boucle devra reecrire a la revelation.
             if inter is not None and inter.message is not None:
-                recent = pk.lire().get("quiz") or [{}]
+                recent = promo.lire_pokemon().get("quiz") or [{}]
                 if recent[0].get("id"):
-                    await asyncio.to_thread(pk.retenir_message, recent[0]["id"],
+                    await asyncio.to_thread(promo.retenir_message, recent[0]["id"],
                                             inter.message.id, inter.channel_id)
             return vue_, fichiers
     if action == "paris":
@@ -3157,7 +3141,7 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         solo = len(args) > 2 and args[2] == "solo"
         if quoi in ("oui", "non") and len(args) > 1:
             if inter is not None:
-                await asyncio.to_thread(pr.voter, args[1], inter.user.id,
+                await asyncio.to_thread(promo.voter, args[1], inter.user.id,
                                         inter.user.display_name, quoi)
             if solo:
                 return await vue_prediction_seule(args[1])
@@ -3165,7 +3149,7 @@ async def _vue_navigation(action, args, valeurs, inter=None):
             return await vue_predictions(int(page) if page.isdigit() else 0)
         if quoi in ("ok", "ko") and len(args) > 1:
             if inter is not None:
-                p, etat = await asyncio.to_thread(pr.trancher, args[1],
+                p, etat = await asyncio.to_thread(promo.trancher, args[1],
                                                   "oui" if quoi == "ok" else "non",
                                                   inter.user.id)
                 await _apres_tranchage(p, etat, inter)
@@ -3184,12 +3168,12 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         for valeur in valeurs if inter is not None else []:
             op, _, ident = str(valeur).partition(":")
             if op in ("ok", "ko"):
-                p, etat = await asyncio.to_thread(pr.trancher, ident,
+                p, etat = await asyncio.to_thread(promo.trancher, ident,
                                                   "oui" if op == "ok" else "non",
                                                   inter.user.id)
                 await _apres_tranchage(p, etat, inter)
             elif op == "suppr":
-                p, etat = await asyncio.to_thread(pr.supprimer, ident, inter.user.id)
+                p, etat = await asyncio.to_thread(promo.supprimer_predictions, ident, inter.user.id)
                 if etat == "pas_auteur":
                     # Apres un defer, un followup n'accepte que du texte.
                     await inter.followup.send(
@@ -3222,20 +3206,20 @@ async def _vue_navigation(action, args, valeurs, inter=None):
         uid = inter.user.id if inter is not None else 0
         nom = inter.user.display_name if inter is not None else ""
         if quoi == "suppr" and len(args) > 1 and inter is not None:
-            _, etat = await asyncio.to_thread(rp.supprimer, args[1], uid)
+            _, etat = await asyncio.to_thread(promo.supprimer_rappels, args[1], uid)
             if etat == "pas_auteur":
                 await inter.followup.send("Ce rappel n'est pas à toi.", ephemeral=True)
         return await vue_rappels(uid, nom)
     if action == "rapsel":
         uid = inter.user.id if inter is not None else 0
         for ident in valeurs:
-            await asyncio.to_thread(rp.supprimer, ident, uid)
+            await asyncio.to_thread(promo.supprimer_rappels, ident, uid)
         return await vue_rappels(uid, inter.user.display_name if inter is not None else "")
     if action == "anniv":
         quoi = args[0] if args else "liste"
         uid = inter.user.id if inter is not None else None
         if quoi == "retirer" and uid is not None:
-            await asyncio.to_thread(an.retirer, uid)
+            await asyncio.to_thread(promo.retirer_anniversaires, uid)
         return await vue_anniversaires(uid)
     if action == "meteo":
         return await vue_meteo(int(args[0]))
@@ -3246,10 +3230,10 @@ async def _vue_navigation(action, args, valeurs, inter=None):
     if action == "dev":
         quoi = args[0] if args else "page"
         if quoi == "fait":
-            await asyncio.to_thread(dv.marquer_fait, args[1])
+            await asyncio.to_thread(promo.marquer_fait, args[1])
             return await vue_devoirs(0)
         if quoi == "suppr":
-            await asyncio.to_thread(dv.supprimer, args[1])
+            await asyncio.to_thread(promo.supprimer_devoirs, args[1])
             return await vue_devoirs(0)
         if quoi == "photo":
             return await vue_devoirs_photo()
@@ -3261,10 +3245,10 @@ async def _vue_navigation(action, args, valeurs, inter=None):
     if action == "devsel":
         quoi = args[0] if args else "suppr"
         for ident in valeurs:
-            await asyncio.to_thread(dv.supprimer if quoi == "suppr" else dv.marquer_fait,
+            await asyncio.to_thread(promo.supprimer_devoirs if quoi == "suppr" else promo.marquer_fait,
                                     ident)
         return await vue_devoirs(0)
-    return ui.erreur(f"action inconnue : `{action}`"), []
+    return affichage.erreur(f"action inconnue : `{action}`"), []
 
 
 # =============================================================================
@@ -3299,8 +3283,8 @@ async def cmd_edt(inter: discord.Interaction, quand: str = "",
         periode(quand, cours)
     except ValueError as e:
         await inter.response.send_message(
-            view=ui.erreur(f"{e}\n-# Essaie `12/10`, `lundi`, `demain`, `la semaine`, "
-                           f"`+14`.", "Date incomprise"), ephemeral=True)
+            view=affichage.erreur(f"{e}\n-# Essaie `12/10`, `lundi`, `demain`, `la semaine`, "
+                                  f"`+14`.", "Date incomprise"), ephemeral=True)
         return
     await inter.response.defer(thinking=True)
     vue_, fichiers = await vue_edt(quand, forme)
@@ -3311,14 +3295,14 @@ async def cmd_edt(inter: discord.Interaction, quand: str = "",
 async def auto_quand(inter: discord.Interaction, saisie: str):
     """Des suggestions, sans jamais fermer la porte : ce que tu tapes reste
     valable meme s'il ne figure pas dans la liste."""
-    bas = celcat.normaliser(saisie)
+    bas = edt.normaliser(saisie)
     sortie = []
     if saisie.strip():
         try:
             debut, fin, mode = periode(saisie)
-            libelle = (vue.jour_fr(debut) if mode == "jour" else
-                       f"du {vue.jour_fr(debut, court=True)} au "
-                       f"{vue.jour_fr(fin, court=True)}")
+            libelle = (affichage.jour_fr(debut) if mode == "jour" else
+                       f"du {affichage.jour_fr(debut, court=True)} au "
+                       f"{affichage.jour_fr(fin, court=True)}")
             sortie.append(app_commands.Choice(name=f"➜ {libelle}",
                                               value=saisie.strip()[:100]))
         except ValueError:
@@ -3326,7 +3310,7 @@ async def auto_quand(inter: discord.Interaction, saisie: str):
     for nom, valeur in SUGGESTIONS:
         if len(sortie) >= 25:
             break
-        if not bas or bas in celcat.normaliser(nom) or bas in celcat.normaliser(valeur):
+        if not bas or bas in edt.normaliser(nom) or bas in edt.normaliser(valeur):
             sortie.append(app_commands.Choice(name=nom, value=valeur or "aujourd'hui"))
     return sortie[:25]
 
@@ -3339,10 +3323,10 @@ async def auto_quand(inter: discord.Interaction, saisie: str):
 async def cmd_photo(inter: discord.Interaction, du: str = "", au: str = ""):
     cours, _ = await _donnees()
     try:
-        debut = vue.lire_date(du, cours, date.today())
-        fin = vue.lire_date(au, cours, debut + timedelta(days=6))
+        debut = affichage.lire_date(du, cours, date.today())
+        fin = affichage.lire_date(au, cours, debut + timedelta(days=6))
     except ValueError as e:
-        await inter.response.send_message(view=ui.erreur(str(e), "Date incomprise"),
+        await inter.response.send_message(view=affichage.erreur(str(e), "Date incomprise"),
                                           ephemeral=True)
         return
     await inter.response.defer(thinking=True)
@@ -3374,9 +3358,9 @@ async def cmd_devoir(inter: discord.Interaction):
 @bot.tree.command(name="fait", description="Marquer un devoir comme fait")
 @app_commands.describe(devoir="le devoir — la liste s'affiche pendant la frappe")
 async def cmd_fait(inter: discord.Interaction, devoir: int):
-    ok = await asyncio.to_thread(dv.marquer_fait, devoir)
+    ok = await asyncio.to_thread(promo.marquer_fait, devoir)
     if not ok:
-        await inter.response.send_message(view=ui.erreur(f"Aucun devoir #{devoir}."),
+        await inter.response.send_message(view=affichage.erreur(f"Aucun devoir #{devoir}."),
                                           ephemeral=True)
         return
     await _commande(inter, vue_devoirs(0))
@@ -3385,9 +3369,9 @@ async def cmd_fait(inter: discord.Interaction, devoir: int):
 @bot.tree.command(name="supprimer", description="Retirer un devoir de la liste")
 @app_commands.describe(devoir="le devoir — la liste s'affiche pendant la frappe")
 async def cmd_supprimer(inter: discord.Interaction, devoir: int):
-    d = await asyncio.to_thread(dv.supprimer, devoir)
+    d = await asyncio.to_thread(promo.supprimer_devoirs, devoir)
     if d is None:
-        await inter.response.send_message(view=ui.erreur(f"Aucun devoir #{devoir}."),
+        await inter.response.send_message(view=affichage.erreur(f"Aucun devoir #{devoir}."),
                                           ephemeral=True)
         return
     await _commande(inter, vue_devoirs(0))
@@ -3406,7 +3390,7 @@ async def cmd_stats(inter: discord.Interaction, quand: int = 0):
     if quand == 99:
         await _commande(inter, vue_bilan())
         return
-    lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * quand)
+    lundi = edt.semaine_de(date.today()) + timedelta(days=7 * quand)
     await _commande(inter, vue_stats(lundi))
 
 
@@ -3415,7 +3399,7 @@ async def cmd_stats(inter: discord.Interaction, quand: int = 0):
 @app_commands.describe(quand="quelle semaine comparer à celle d'avant (cette semaine par défaut)")
 @app_commands.choices(quand=SEMAINE_CHOIX[:3])
 async def cmd_comparer(inter: discord.Interaction, quand: int = 0):
-    lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * quand)
+    lundi = edt.semaine_de(date.today()) + timedelta(days=7 * quand)
     await _commande(inter, vue_comparer(lundi))
 
 
@@ -3450,13 +3434,13 @@ async def cmd_calendrier(inter: discord.Interaction, quand: str = "",
     # La saisie est lue AVANT le defer : seule la premiere reponse peut etre
     # ephemere, et une erreur de saisie n'a rien a faire dans le salon.
     try:
-        fenetre_alternance(quand, await asyncio.to_thread(alt.charger))
-    except (alt.CalendrierIntrouvable, OSError):
+        fenetre_alternance(quand, await asyncio.to_thread(ecole.charger_alternance))
+    except (ecole.CalendrierIntrouvable, OSError):
         pass                     # vue_alternance() le dira mieux, et dit quoi faire
     except ValueError as e:
         await inter.response.send_message(
-            view=ui.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
-                           f"`3 mois`, ou `année`.", "Date incomprise"),
+            view=affichage.erreur(f"{e}\n-# Essaie `novembre`, `janvier 27`, `+21`, "
+                                  f"`3 mois`, ou `année`.", "Date incomprise"),
             ephemeral=True)
         return
     await _commande(inter, vue_alternance(quand, forme))
@@ -3466,20 +3450,20 @@ async def cmd_calendrier(inter: discord.Interaction, quand: str = "",
 async def auto_calendrier(inter: discord.Interaction, saisie: str):
     """Les mois du calendrier, et les durees usuelles. Le champ reste libre :
     ce qu'on tape vaut meme s'il ne figure pas dans la liste."""
-    bas = celcat.normaliser(saisie)
+    bas = edt.normaliser(saisie)
     sortie = []
     try:
-        cal = await asyncio.to_thread(alt.charger)
+        cal = await asyncio.to_thread(ecole.charger_alternance)
     except Exception:                        # noqa: BLE001 - l'aide ne doit jamais casser
         return []
 
     if saisie.strip():
         try:
             debut, fin, mode, _ = fenetre_alternance(saisie, cal)
-            libelle = (f"{alt.MOIS_FR[debut.month - 1]} {debut.year}"
+            libelle = (f"{ecole.MOIS_FR[debut.month - 1]} {debut.year}"
                        if mode == "mois" else
                        "l'année entière" if mode == "annee" else
-                       alt.intervalle_fr(debut, fin, court=True))
+                       ecole.intervalle_fr(debut, fin, court=True))
             sortie.append(app_commands.Choice(name=f"➜ {libelle}"[:100],
                                               value=saisie.strip()[:100]))
         except ValueError:
@@ -3489,12 +3473,12 @@ async def auto_calendrier(inter: discord.Interaction, saisie: str):
                     ("les 21 jours qui viennent", "+21"),
                     ("les 3 mois qui viennent", "3 mois"),
                     ("le prochain retour à l'école", "prochain")]
-    propositions += [(f"{alt.MOIS_FR[m - 1]} {a}", f"{alt.MOIS_FR[m - 1]} {a}")
+    propositions += [(f"{ecole.MOIS_FR[m - 1]} {a}", f"{ecole.MOIS_FR[m - 1]} {a}")
                      for a, m in _mois_du_calendrier(cal)]
     for nom, valeur in propositions:
         if len(sortie) >= 25:
             break
-        if not bas or bas in celcat.normaliser(nom):
+        if not bas or bas in edt.normaliser(nom):
             sortie.append(app_commands.Choice(name=nom[:100], value=valeur[:100]))
     return sortie[:25]
 
@@ -3519,9 +3503,9 @@ async def cmd_quiz(inter: discord.Interaction, generation: int = 0,
     # reveler quand le temps sera ecoule, meme apres un redemarrage.
     try:
         message = await inter.original_response()
-        dernier = pk.lire().get("quiz", [{}])[0]
+        dernier = promo.lire_pokemon().get("quiz", [{}])[0]
         if dernier.get("id"):
-            await asyncio.to_thread(pk.retenir_message, dernier["id"],
+            await asyncio.to_thread(promo.retenir_message, dernier["id"],
                                     message.id, inter.channel_id)
     except discord.HTTPException:
         pass
@@ -3543,7 +3527,7 @@ async def cmd_parier(inter: discord.Interaction):
 @app_commands.describe(
     question="la question",
     reponses="séparées par « ; » : 🍕 Pizza ; 🍔 Burger — vide = Oui / Non",
-    duree=f"combien de temps il reste ouvert ({sd.duree_texte(config.SONDAGE_DUREE_HEURES)} par défaut)",
+    duree=f"combien de temps il reste ouvert ({promo.duree_texte(config.SONDAGE_DUREE_HEURES)} par défaut)",
     plusieurs="chacun peut cocher plusieurs réponses")
 @app_commands.choices(duree=DUREE_CHOIX)
 async def cmd_sondage(inter: discord.Interaction, question: str, reponses: str = "",
@@ -3555,13 +3539,13 @@ async def cmd_sondage(inter: discord.Interaction, question: str, reponses: str =
 @cmd_sondage.autocomplete("reponses")
 async def auto_reponses(inter: discord.Interaction, saisie: str):
     """Des jeux de reponses tout prets ; ce que tu tapes reste valable."""
-    bas = celcat.normaliser(saisie)
+    bas = edt.normaliser(saisie)
     sortie = []
     if saisie.strip():
         sortie.append(app_commands.Choice(name=f"➜ {saisie.strip()}"[:100],
                                           value=saisie.strip()[:100]))
-    for nom, valeur in sd.MODELES:
-        if not bas or bas in celcat.normaliser(nom) or bas in celcat.normaliser(valeur):
+    for nom, valeur in promo.MODELES:
+        if not bas or bas in edt.normaliser(nom) or bas in edt.normaliser(valeur):
             sortie.append(app_commands.Choice(name=nom, value=valeur))
     return sortie[:25]
 
@@ -3581,15 +3565,15 @@ async def auto_rappel_quand(inter: discord.Interaction, saisie: str):
     sortie = []
     if saisie.strip():
         try:
-            moment = rp.lire_moment(saisie)
+            moment = promo.lire_moment(saisie)
             sortie.append(app_commands.Choice(
-                name=f"➜ {vue.jour_fr(moment.date())} à {moment:%H:%M}"[:100],
+                name=f"➜ {affichage.jour_fr(moment.date())} à {moment:%H:%M}"[:100],
                 value=saisie.strip()[:100]))
         except ValueError:
             pass
-    bas = celcat.normaliser(saisie)
+    bas = edt.normaliser(saisie)
     for s in SUGGESTIONS_RAPPEL:
-        if not bas or bas in celcat.normaliser(s):
+        if not bas or bas in edt.normaliser(s):
             sortie.append(app_commands.Choice(name=s, value=s))
     return sortie[:25]
 
@@ -3607,7 +3591,7 @@ async def cmd_rappels(inter: discord.Interaction):
     retirer="oui = te retirer de la liste")
 async def cmd_anniversaire(inter: discord.Interaction, quand: str = "", retirer: bool = False):
     if retirer:
-        ok = await asyncio.to_thread(an.retirer, inter.user.id)
+        ok = await asyncio.to_thread(promo.retirer_anniversaires, inter.user.id)
         await inter.response.send_message(
             view=carte("Anniversaire retiré" if ok else "Rien à retirer",
                        ["Tu n'es plus dans la liste." if ok else "Tu n'y étais pas."],
@@ -3631,7 +3615,7 @@ async def cmd_clear(inter: discord.Interaction, nombre: int = 100):
     nombre = max(1, min(nombre, CLEAR_MAX))
     if not _peut_nettoyer(inter):
         await inter.response.send_message(
-            view=ui.erreur(REFUS_CLEAR),
+            view=affichage.erreur(REFUS_CLEAR),
             ephemeral=True)
         return
     await inter.response.send_message(
@@ -3676,22 +3660,22 @@ async def cmd_ics(inter: discord.Interaction):
     await inter.response.defer(ephemeral=True, thinking=True)
 
     def travail():
-        cours, _ = celcat.charger(hors_ligne=True)
-        liste_devoirs = dv.lire()
+        cours, _ = edt.charger(hors_ligne=True)
+        liste_devoirs = promo.lire_devoirs()
         chemin = config.DONNEES / "cyu.ics"
         vrais = [c for c in cours if c.est_cours]
-        vue.exporter_ics(vrais, liste_devoirs, chemin)
-        return chemin.read_bytes(), len(vrais), len(dv.actifs(liste_devoirs))
+        affichage.exporter_ics(vrais, liste_devoirs, chemin)
+        return chemin.read_bytes(), len(vrais), len(promo.actifs(liste_devoirs))
 
     octets, nb_cours, nb_devoirs = await asyncio.to_thread(travail)
     fichier = discord.File(io.BytesIO(octets), filename="cyu.ics")
-    conteneur = discord.ui.Container(accent_colour=ui.couleur("calme"))
+    conteneur = discord.ui.Container(accent_colour=affichage.couleur("calme"))
     conteneur.add_item(discord.ui.TextDisplay(
         f"## Ton agenda\n-# {nb_cours} cours · {nb_devoirs} devoirs\n"
         "Importe-le dans Google Agenda ou dans l'appli de ton téléphone. "
         "Les devoirs y sont en événements d'une journée."))
     conteneur.add_item(discord.ui.File("attachment://cyu.ics"))
-    vue_ = ui.Carte()
+    vue_ = affichage.Carte()
     vue_.add_item(conteneur)
     await inter.edit_original_response(view=vue_, attachments=[fichier])
 
@@ -3731,14 +3715,14 @@ async def cmd_help(inter: discord.Interaction):
 # relire un sondage, creer un evenement) passe par ici, toutes les 30 s.
 # Chaque tache est independante : l'une qui echoue n'empeche pas les autres.
 def _etat_bot():
-    return stockage.lire(config.FICHIER_ETAT_BOT, {})
+    return config.lire_json(config.FICHIER_ETAT_BOT, {})
 
 
 def _deja(cle):
     return cle in (_etat_bot().get("envoyes") or {})
 
 
-@stockage.exclusif(config.FICHIER_ETAT_BOT)
+@config.exclusif(config.FICHIER_ETAT_BOT)
 def _marquer(cle):
     """Memorise un envoi (anti-doublon a travers les redemarrages), et purge
     ce qui a plus de 30 jours."""
@@ -3747,16 +3731,16 @@ def _marquer(cle):
     envoyes[cle] = datetime.now().isoformat(timespec="seconds")
     limite = (datetime.now() - timedelta(days=30)).isoformat()
     etat["envoyes"] = {k: v for k, v in envoyes.items() if v >= limite}
-    stockage.ecrire(config.FICHIER_ETAT_BOT, etat)
+    config.ecrire_json(config.FICHIER_ETAT_BOT, etat)
 
 
 async def _tic_rappels(maintenant):
     """Les rappels dont l'heure est passee : postes la ou ils ont ete poses,
     en mentionnant qui il faut. Un salon disparu ne bloque pas les autres."""
-    for r in await asyncio.to_thread(rp.echus, maintenant):
+    for r in await asyncio.to_thread(promo.echus, maintenant):
         here = r.get("qui") == "here"
         mention = "@here" if here else f"<@{r['auteur_id']}>"
-        q = rp.quand(r)
+        q = promo.quand(r)
         lignes = [f"{mention} — **{r['texte']}**",
                   f"-# rappel posé par {r['auteur']}" + (f" pour {q:%H:%M}" if q else "")]
         try:
@@ -3767,30 +3751,30 @@ async def _tic_rappels(maintenant):
                                        emoji="⏰")], pied=False),
                 allowed_mentions=discord.AllowedMentions(users=True, everyone=here))
         except discord.HTTPException as e:
-            abandonne = await asyncio.to_thread(rp.echec, r["id"])
+            abandonne = await asyncio.to_thread(promo.echec, r["id"])
             print(f"[!] rappel #{r['id']} non envoyé ({e})"
                   f"{' — abandonné' if abandonne else ''}", flush=True)
             continue
-        await asyncio.to_thread(rp.retirer, r["id"])
+        await asyncio.to_thread(promo.retirer_rappels, r["id"])
 
 
 async def _tic_anniversaires(maintenant):
     if not config.ANNIVERSAIRES:
         return
-    moment = vue.a_heure(maintenant.date(), config.ANNIVERSAIRES_HEURE, (8, 0))
+    moment = affichage.a_heure(maintenant.date(), config.ANNIVERSAIRES_HEURE, (8, 0))
     if not assistant._du(moment, maintenant, fenetre_min=10):
         return
-    for uid, e in await asyncio.to_thread(an.du_jour, maintenant.date()):
+    for uid, e in await asyncio.to_thread(promo.du_jour, maintenant.date()):
         cle = f"anniv:{maintenant.date()}:{uid}"
         if _deja(cle):
             continue
-        age = an.age_le(e, maintenant.date())
+        age = promo.age_le(e, maintenant.date())
         corps = [f"C'est l'anniversaire de <@{uid}> aujourd'hui"
                  + (f" — **{age} ans** !" if age else " !"),
                  "", "Un petit mot, un gâteau à la pause, une pensée. 🎉"]
         # Par le daemon-notif (webhook ou bot, selon config) : c'est #annonces,
         # comme les briefings, et la mention part dans le contenu du message.
-        ok = await asyncio.to_thread(notif.envoyer, "🎂 Joyeux anniversaire !", corps,
+        ok = await asyncio.to_thread(affichage.envoyer, "🎂 Joyeux anniversaire !", corps,
                                      "cours", False, "annonces", None, [uid])
         if ok:
             _marquer(cle)
@@ -3802,26 +3786,26 @@ async def _tic_sondages(maintenant):
     Discord a clos le sondage, on poste le resultat en reponse."""
     if not config.SONDAGE_RESULTATS:
         return
-    for s in await asyncio.to_thread(sd.a_relever, maintenant):
+    for s in await asyncio.to_thread(promo.a_relever, maintenant):
         try:
             salon = await _salon(s["salon_id"])
             message = await salon.fetch_message(int(s["message_id"]))
         except discord.HTTPException:
-            await asyncio.to_thread(sd.oublier, s["message_id"])     # supprime
+            await asyncio.to_thread(promo.oublier, s["message_id"])     # supprime
             continue
         sondage = message.poll
         if sondage is None:
-            await asyncio.to_thread(sd.oublier, s["message_id"])
+            await asyncio.to_thread(promo.oublier, s["message_id"])
             continue
         if not sondage.is_finalised():
             # Discord cloture avec un peu de retard (parfois une heure) : on
             # relira plus tard, pas a chaque tour, et pas eternellement.
-            if sd.perime(s, maintenant):
-                await asyncio.to_thread(sd.oublier, s["message_id"])
+            if promo.perime(s, maintenant):
+                await asyncio.to_thread(promo.oublier, s["message_id"])
             else:
-                await asyncio.to_thread(sd.marquer_lecture, s["message_id"], maintenant)
+                await asyncio.to_thread(promo.marquer_lecture, s["message_id"], maintenant)
             continue
-        lignes, gagnant = sd.resultat(sondage)
+        lignes, gagnant = promo.resultat(sondage)
         if gagnant:
             lignes = [f"### 🏆 {gagnant}", ""] + lignes
         elif sondage.total_votes:
@@ -3837,7 +3821,7 @@ async def _tic_sondages(maintenant):
                 reference=message, mention_author=False)
         except discord.HTTPException as e:
             print(f"[!] résultat du sondage {s['message_id']} non posté : {e}", flush=True)
-        await asyncio.to_thread(sd.oublier, s["message_id"])
+        await asyncio.to_thread(promo.oublier, s["message_id"])
 
 
 async def _tic_recap_predictions(maintenant):
@@ -3849,10 +3833,10 @@ async def _tic_recap_predictions(maintenant):
     if not salon_id or maintenant.weekday() != config.RECAP_SEMAINE_JOUR:
         return
     cle = f"recap-pred:{maintenant.date()}"
-    moment = vue.a_heure(maintenant.date(), config.RECAP_SEMAINE_HEURE, (18, 0))
+    moment = affichage.a_heure(maintenant.date(), config.RECAP_SEMAINE_HEURE, (18, 0))
     if _deja(cle) or not assistant._du(moment, maintenant, fenetre_min=10):
         return
-    liste = await asyncio.to_thread(pr.lire)
+    liste = await asyncio.to_thread(promo.lire_predictions)
     if not liste:
         _marquer(cle)
         return
@@ -3888,7 +3872,7 @@ async def _tic_evenements(maintenant):
             print("[!] examens → événements : le bot n'a pas « Gérer les événements »",
                   flush=True)
             await asyncio.to_thread(
-                notif.envoyer, "Examens en événements : refusé",
+                affichage.envoyer, "Examens en événements : refusé",
                 ["Le bot n'a pas le droit **« Gérer les événements »** sur le serveur.",
                  "Donne-le-lui (Paramètres du serveur → Rôles → le rôle du bot), ou "
                  "mets `classe.evenements_examens: false` dans config.yaml."],
@@ -3935,7 +3919,7 @@ async def en_cas_d_erreur(inter: discord.Interaction, err: app_commands.AppComma
             # serait refusee (voir repondre()).
             await inter.followup.send(texte, ephemeral=True)
         else:
-            await inter.response.send_message(view=ui.erreur(texte), ephemeral=True)
+            await inter.response.send_message(view=affichage.erreur(texte), ephemeral=True)
     except discord.HTTPException:
         pass
 

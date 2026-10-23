@@ -39,6 +39,10 @@ briefings disent tout. Si tu en veux quand meme, remplis
 
 En pratique tu lanceras plutot bot.py, qui fait tourner ce daemon ET repond aux
 commandes Discord dans le meme processus.
+
+Aussi dans ce fichier :
+
+    La surveillance du webmail                    (ex-uptime.py)
 """
 
 from __future__ import annotations
@@ -47,23 +51,16 @@ import argparse
 import sys
 import time
 from datetime import date, datetime, timedelta
+from urllib.parse import urlsplit
 
 import requests
 
-import actu
-import celcat
-import changements as chg
+import affichage
 import config
-import devoirs as dv
+import edt
 import image
-import meteo
-import notif
-import stats
-import statut
-import stockage
-import vue
-from celcat import EchecConnexion
-from notif import EchecDiscord
+import promo
+
 
 # Certains terminaux servent un stdout en cp1252 : sans ca, un simple print
 # d'un intitule accentue fait planter le script.
@@ -77,7 +74,7 @@ except (AttributeError, OSError):
 def envoyer(titre, lignes, couleur="info", ping=False, canal="logs"):
     """Un message Discord. Ne leve jamais : un souci reseau ne doit pas tuer un
     daemon qui tourne depuis trois semaines."""
-    return notif.envoyer(titre, lignes, couleur=couleur, ping=ping, canal=canal)
+    return affichage.envoyer(titre, lignes, couleur=couleur, ping=ping, canal=canal)
 
 
 def envoyer_photo(titre, lignes, dessin, couleur="cours", ping=False,
@@ -95,8 +92,8 @@ def envoyer_photo(titre, lignes, dessin, couleur="cours", ping=False,
     if config.IMAGES and image.DISPONIBLE:
         try:
             chemin = dessin()
-            if notif.envoyer_image(chemin, titre, lignes, canal=canal,
-                                   couleur=couleur, ping=ping):
+            if affichage.envoyer_image(chemin, titre, lignes, canal=canal,
+                                       couleur=couleur, ping=ping):
                 return True
             print("[!] photo non publiee, envoi du texte seul", flush=True)
         except Exception as e:                      # noqa: BLE001 - filet volontaire
@@ -112,13 +109,13 @@ def sortir(titre, lignes, vers_discord, couleur="info", canal="annonces"):
         ok = envoyer(titre, lignes, couleur=couleur, canal=canal)
         print("envoye." if ok else "echec de l'envoi.", flush=True)
     else:
-        print(f"\n=== {vue.sans_markdown(titre)} ===")
-        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        print(f"\n=== {affichage.sans_markdown(titre)} ===")
+        print(affichage.sans_markdown("\n".join(lignes)) + "\n")
 
 
 # --- Etat du daemon (anti-doublon) -------------------------------------------
 def lire_etat():
-    return stockage.lire(config.FICHIER_ETAT, {})
+    return config.lire_json(config.FICHIER_ETAT, {})
 
 
 def deja_envoye(etat, cle):
@@ -132,7 +129,7 @@ def marquer(etat, cle):
     envoyes[cle] = datetime.now().isoformat(timespec="seconds")
     limite = (datetime.now() - timedelta(days=30)).isoformat()
     etat["envoyes"] = {k: v for k, v in envoyes.items() if v >= limite}
-    stockage.ecrire(config.FICHIER_ETAT, etat)
+    config.ecrire_json(config.FICHIER_ETAT, etat)
 
 
 def _du(moment, maintenant, fenetre_min=5):
@@ -150,8 +147,8 @@ def en_silence(maintenant=None):
     if not config.SILENCE_DE or not config.SILENCE_A:
         return False
     maintenant = maintenant or datetime.now()
-    debut = vue.hhmm(config.SILENCE_DE, (23, 0))
-    fin = vue.hhmm(config.SILENCE_A, (6, 30))
+    debut = affichage.hhmm(config.SILENCE_DE, (23, 0))
+    fin = affichage.hhmm(config.SILENCE_A, (6, 30))
     courant = (maintenant.hour, maintenant.minute)
     if debut <= fin:
         return debut <= courant < fin
@@ -182,17 +179,17 @@ def signaler_soupcon(message):
 def resume_changements(liste):
     """La legende sous la photo : le compte par type, pas un doublon de l'image."""
     lignes = []
-    for type_ in chg.ORDRE:
+    for type_ in edt.ORDRE:
         combien = sum(1 for ch in liste if ch.type == type_)
         if not combien:
             continue
-        icone = chg.ENTETES[type_][0]
-        lignes.append(f"{icone} **{combien}** {chg.libelle(type_, combien).lower()}")
+        icone = edt.ENTETES[type_][0]
+        lignes.append(f"{icone} **{combien}** {edt.libelle_changements(type_, combien).lower()}")
     jours = sorted({j for ch in liste for j in ch.jours})
     if jours:
         lignes.append("")
         lignes.append("-# Concerne : " + ", ".join(
-            vue.jour_fr(j, court=True) for j in jours[:6])
+            affichage.jour_fr(j, court=True) for j in jours[:6])
             + (f" et {len(jours) - 6} autres jours" if len(jours) > 6 else ""))
     return lignes
 
@@ -216,14 +213,14 @@ def publier_actu(rapport, cours, aujourd=None, demarrage=False):
         envoyer_photo(
             "📢 L'emploi du temps est sorti",
             [f"**{len(sortie['cours'])} cours** publiés, du "
-             f"{vue.jour_fr(sortie['du'])} au {vue.jour_fr(sortie['au'])}."],
+             f"{affichage.jour_fr(sortie['du'])} au {affichage.jour_fr(sortie['au'])}."],
             lambda: image.rendre(cours, sortie["du"], fin,
                                  config.DONNEES / "publication.png",
                                  titre="L'emploi du temps est sorti"),
             couleur="cours", ping=True, canal="annonces",
             secours=[f"**{len(sortie['cours'])} cours** publiés, du "
-                     f"{vue.jour_fr(sortie['du'])} au {vue.jour_fr(sortie['au'])}.", ""]
-                    + vue.bloc_semaine(cours, celcat.semaine_de(sortie["du"])))
+                     f"{affichage.jour_fr(sortie['du'])} au {affichage.jour_fr(sortie['au'])}.", ""]
+                    + affichage.bloc_semaine(cours, edt.semaine_de(sortie["du"])))
         print(f"{datetime.now():%H:%M} | publication : {len(sortie['cours'])} cours",
               flush=True)
         return len(sortie["cours"])
@@ -242,12 +239,12 @@ def publier_actu(rapport, cours, aujourd=None, demarrage=False):
     # jour ou l'autre.
     if config.JOURS_ALERTES and aujourd.weekday() not in config.JOURS_ALERTES:
         ping = False
-    titre = chg.titre(liste)
+    titre = edt.titre(liste)
     legende = resume_changements(liste)
     if demarrage or rapport.pendant_absence:
         legende = ["-# Détecté au redémarrage : ça a bougé pendant que "
                    "l'assistant était éteint.", ""] + legende
-    texte, _ = chg.bloc(liste, aujourd)
+    texte, _ = edt.bloc_changements(liste, aujourd)
 
     envoyer_photo(
         titre, legende,
@@ -255,7 +252,7 @@ def publier_actu(rapport, cours, aujourd=None, demarrage=False):
                                          titre=titre,
                                          sous_titre="détecté "
                                                     f"{datetime.now():le %d/%m à %H:%M}"),
-        couleur=chg.couleur(liste, aujourd), ping=ping,
+        couleur=edt.couleur(liste, aujourd), ping=ping,
         canal="alertes" if ping else "edt", secours=texte)
     print(f"{datetime.now():%H:%M} | {len(liste)} changements EDT annonces",
           flush=True)
@@ -289,13 +286,13 @@ def ligne_meteo(jc, jour):
         return []
     try:
         premier = jc[0]
-        resume = meteo.jour(jour)
+        resume = edt.jour(jour)
         if premier.a_distance:
-            creneaux = meteo.fenetre(premier.debut, premier.fin or premier.debut)
+            creneaux = edt.fenetre(premier.debut, premier.fin or premier.debut)
         else:
-            _, depart = vue.heure_lever(premier)
-            creneaux = meteo.fenetre(depart, premier.debut)
-        gene = meteo.pire(creneaux)
+            _, depart = affichage.heure_lever(premier)
+            creneaux = edt.fenetre(depart, premier.debut)
+        gene = edt.pire(creneaux)
     except Exception as e:                      # noqa: BLE001 - filet volontaire
         print(f"[!] meteo ignoree dans la legende : {e}", flush=True)
         return []
@@ -303,7 +300,7 @@ def ligne_meteo(jc, jour):
     if resume is None and gene is None:
         return []
     if gene is not None and gene.mouille:
-        phrase = meteo.conseil(creneaux)
+        phrase = edt.conseil(creneaux)
         return [f"{gene.emoji} **{gene.detail()}** au départ"
                 + (f" — {phrase}." if phrase else ".")]
     if resume is not None:
@@ -318,9 +315,9 @@ def legende_jour(cours, liste_devoirs, jour):
     doit apparaitre dans la NOTIFICATION Discord, ou l'image n'est pas
     visible : l'amplitude, les salles, et ce qu'il faut rendre.
     """
-    jc = celcat.du_jour(cours, jour)
+    jc = edt.du_jour(cours, jour)
     if not jc:
-        autres = celcat.non_cours_du_jour(cours, jour)
+        autres = edt.non_cours_du_jour(cours, jour)
         return [f"Aucun cours{f' — {autres[0].titre}' if autres else ''}. 🎉"]
 
     fin = jc[-1].fin or jc[-1].debut
@@ -332,26 +329,26 @@ def legende_jour(cours, liste_devoirs, jour):
 
     lignes += ligne_meteo(jc, jour)
 
-    a_rendre = [d for d in dv.actifs(liste_devoirs)
-                if (r := dv.jours_restants(d)) is not None and r <= 1]
+    a_rendre = [d for d in promo.actifs(liste_devoirs)
+                if (r := promo.jours_restants(d)) is not None and r <= 1]
     if a_rendre:
         lignes += ["", "📌 **À rendre**"] + \
-                  [vue.ligne_devoir(d, avec_id=False) for d in a_rendre]
+                  [affichage.ligne_devoir(d, avec_id=False) for d in a_rendre]
     return lignes
 
 
 def _corps_briefing_matin(cours, liste_devoirs, aujourd, maintenant):
-    corps = vue.bloc_journee(cours, liste_devoirs, aujourd, maintenant=maintenant)
-    corps = _avec_meteo(corps, celcat.du_jour(cours, aujourd), aujourd)
-    urgents = dv.actifs(liste_devoirs, 0)
+    corps = affichage.bloc_journee(cours, liste_devoirs, aujourd, maintenant=maintenant)
+    corps = _avec_meteo(corps, edt.du_jour(cours, aujourd), aujourd)
+    urgents = promo.actifs(liste_devoirs, 0)
     if urgents:
         corps += ["", "🔥 **A rendre aujourd'hui**"] + \
-                 [vue.ligne_devoir(d) for d in urgents]
-    demain = dv.actifs(liste_devoirs, 1)
+                 [affichage.ligne_devoir(d) for d in urgents]
+    demain = promo.actifs(liste_devoirs, 1)
     demain = [d for d in demain if d not in urgents]
     if demain:
         corps += ["", "⚠️ **Pour demain**"] + \
-                 [vue.ligne_devoir(d, avec_id=False) for d in demain]
+                 [affichage.ligne_devoir(d, avec_id=False) for d in demain]
     return corps, urgents
 
 
@@ -363,15 +360,15 @@ def _avec_meteo(corps, jc, jour):
 
 
 def _corps_briefing_soir(cours, liste_devoirs, demain):
-    corps = vue.bloc_journee(cours, liste_devoirs, demain, avec_reveil=True)
-    corps = _avec_meteo(corps, celcat.du_jour(cours, demain), demain)
+    corps = affichage.bloc_journee(cours, liste_devoirs, demain, avec_reveil=True)
+    corps = _avec_meteo(corps, edt.du_jour(cours, demain), demain)
     seuils = set(config.DEVOIRS_JOURS_AVANT)
-    urgents = [d for d in dv.actifs(liste_devoirs)
-               if (r := dv.jours_restants(d)) is not None
+    urgents = [d for d in promo.actifs(liste_devoirs)
+               if (r := promo.jours_restants(d)) is not None
                and (r in seuils or r < 0)]
     if urgents:
         corps += ["", "⏳ **Echeances qui approchent**"] + \
-                 [vue.ligne_devoir(d) for d in urgents]
+                 [affichage.ligne_devoir(d) for d in urgents]
     return corps, urgents
 
 
@@ -380,19 +377,19 @@ def daemon():
     demarrage = datetime.now()
     session = None
     try:
-        session = celcat.Session()
-    except (EchecConnexion, requests.RequestException) as e:
+        session = edt.Session()
+    except (edt.EchecConnexion, requests.RequestException) as e:
         print(f"[!] connexion CELCAT impossible au demarrage ({e}), "
               f"on demarre sur le cache", flush=True)
 
     etat = lire_etat()
-    cours, origine = celcat.charger(hors_ligne=session is None, session=session)
-    liste_devoirs = dv.lire()
+    cours, origine = edt.charger(hors_ligne=session is None, session=session)
+    liste_devoirs = promo.lire_devoirs()
 
     # La reference des changements vit sur le disque : ce qui a bouge pendant
     # que le bot etait eteint sera annonce a la premiere lecture, au lieu
     # d'etre avale en silence.
-    suivi = actu.Suivi()
+    suivi = edt.Suivi()
     if origine == "celcat":
         publier_actu(suivi.observer(cours), cours, date.today(), demarrage=True)
 
@@ -410,8 +407,8 @@ def daemon():
 
     # Les deux tableaux vivants sont ecrits tout de suite : au redemarrage, ils
     # doivent redevenir justes sans attendre le prochain cycle.
-    statut.publier_tableau_edt(cours, liste_devoirs)
-    statut.publier(cours, liste_devoirs, demarrage)
+    affichage.publier_tableau_edt(cours, liste_devoirs)
+    affichage.publier(cours, liste_devoirs, demarrage)
 
     derniere_verif = datetime.now()
     dernier_tableau = datetime.now()
@@ -422,15 +419,15 @@ def daemon():
         maintenant = datetime.now()
         aujourd = maintenant.date()
         demain = aujourd + timedelta(days=1)
-        liste_devoirs = dv.lire()
+        liste_devoirs = promo.lire_devoirs()
 
         # 1. Rafraichir l'emploi du temps et signaler les changements.
         if (maintenant - derniere_verif).total_seconds() >= config.VERIF_EDT_MINUTES * 60:
             derniere_verif = maintenant
             try:
                 if session is None:
-                    session = celcat.Session()
-                cours, origine = celcat.charger(session=session)
+                    session = edt.Session()
+                cours, origine = edt.charger(session=session)
                 # charger() se rabat sur le cache quand CELCAT ne repond pas :
                 # comparer le cache a lui-meme ne dirait rien, et pourrait
                 # faire passer une lecture partielle pour un changement.
@@ -442,7 +439,7 @@ def daemon():
                             "La connexion a CELCAT est retablie.",
                             couleur="calme", canal="logs")
                 echecs = 0
-            except (EchecConnexion, requests.RequestException) as e:
+            except (edt.EchecConnexion, requests.RequestException) as e:
                 echecs += 1
                 session = None
                 print(f"{maintenant:%H:%M} | verif KO ({echecs}) : {e}", flush=True)
@@ -458,16 +455,16 @@ def daemon():
         if (maintenant - dernier_tableau).total_seconds() >= \
                 config.RAFRAICHIR_TABLEAUX_MINUTES * 60:
             dernier_tableau = maintenant
-            statut.publier(cours, liste_devoirs, demarrage, echecs)
-            statut.publier_tableau_edt(cours, liste_devoirs)
+            affichage.publier(cours, liste_devoirs, demarrage, echecs)
+            affichage.publier_tableau_edt(cours, liste_devoirs)
             # Le poids des semaines a venir est retenu au passage : c'est la
             # seule occasion de le faire, CELCAT ne rend jamais le passe.
             try:
-                stats.archiver_horizon(cours, aujourd)
+                edt.archiver_horizon(cours, aujourd)
             except Exception as e:              # noqa: BLE001 - filet volontaire
                 print(f"[!] archivage des semaines ignore : {e}", flush=True)
 
-        jc = celcat.du_jour(cours, aujourd)
+        jc = edt.du_jour(cours, aujourd)
 
         # 3. Briefing du matin. Les jours de la semaine ou il part se reglent
         #    dans config.yaml (briefing_matin_jours) ; vide = tous les jours.
@@ -476,11 +473,11 @@ def daemon():
                 (not config.BRIEFING_MATIN_JOURS or
                  aujourd.weekday() in config.BRIEFING_MATIN_JOURS) and \
                 (jc or not config.BRIEFING_SI_COURS) and \
-                _du(vue.a_heure(aujourd, config.BRIEFING_MATIN, (7, 0)), maintenant):
+                _du(affichage.a_heure(aujourd, config.BRIEFING_MATIN, (7, 0)), maintenant):
             corps, urgents = _corps_briefing_matin(cours, liste_devoirs, aujourd,
                                                    maintenant)
             envoyer_photo(
-                f"☀️ {vue.jour_fr(aujourd).capitalize()}",
+                f"☀️ {affichage.jour_fr(aujourd).capitalize()}",
                 legende_jour(cours, liste_devoirs, aujourd),
                 lambda: image.rendre_jour(cours, liste_devoirs, aujourd,
                                           config.DONNEES / "briefing-matin.png"),
@@ -495,11 +492,11 @@ def daemon():
                 if deja_envoye(etat, cle):
                     continue
                 if _du(c.debut - timedelta(minutes=minutes), maintenant, fenetre_min=2):
-                    liees = dv.du_cours(c, liste_devoirs)
+                    liees = promo.du_cours(c, liste_devoirs)
                     corps = [c.ligne()]
                     if liees:
                         corps += ["", "📌 **A rendre pour ce cours**"] + \
-                                 [vue.ligne_devoir(d, avec_id=False) for d in liees]
+                                 [affichage.ligne_devoir(d, avec_id=False) for d in liees]
                     envoyer(f"Dans {minutes} min : {c.titre}", corps,
                             couleur="cours", ping=bool(liees), canal="annonces")
                     marquer(etat, cle)
@@ -511,7 +508,7 @@ def daemon():
             cle = f"premier:{premier.debut.isoformat()}"
             moment = premier.debut - timedelta(minutes=config.PREMIER_COURS_MINUTES)
             if not deja_envoye(etat, cle) and _du(moment, maintenant, fenetre_min=3):
-                _, depart = vue.heure_lever(premier)
+                _, depart = affichage.heure_lever(premier)
                 envoyer(f"🚶 Premier cours dans {config.PREMIER_COURS_MINUTES} min",
                         [premier.ligne(),
                          "" if premier.a_distance else
@@ -526,7 +523,7 @@ def daemon():
             cle = f"relance:{aujourd}"
             dernier = max((c.fin or c.debut) for c in jc)
             if config.RELANCE_DEVOIRS_HEURE:
-                moment = vue.a_heure(aujourd, config.RELANCE_DEVOIRS_HEURE, (18, 0))
+                moment = affichage.a_heure(aujourd, config.RELANCE_DEVOIRS_HEURE, (18, 0))
             else:
                 moment = dernier + timedelta(
                     minutes=config.RELANCE_DEVOIRS_APRES_MINUTES)
@@ -550,16 +547,16 @@ def daemon():
         if not deja_envoye(etat, cle) and \
                 (not config.BRIEFING_SOIR_JOURS or
                  aujourd.weekday() in config.BRIEFING_SOIR_JOURS) and \
-                (celcat.du_jour(cours, demain) or not config.BRIEFING_SI_COURS) and \
-                _du(vue.a_heure(aujourd, config.BRIEFING_SOIR, (20, 0)), maintenant):
+                (edt.du_jour(cours, demain) or not config.BRIEFING_SI_COURS) and \
+                _du(affichage.a_heure(aujourd, config.BRIEFING_SOIR, (20, 0)), maintenant):
             corps, urgents = _corps_briefing_soir(cours, liste_devoirs, demain)
             envoyer_photo(
-                f"🌙 Demain — {vue.jour_fr(demain)}",
+                f"🌙 Demain — {affichage.jour_fr(demain)}",
                 legende_jour(cours, liste_devoirs, demain),
                 lambda: image.rendre_jour(cours, liste_devoirs, demain,
                                           config.DONNEES / "briefing-soir.png"),
                 couleur="info",
-                ping=any((r := dv.jours_restants(d)) is not None and r <= 1
+                ping=any((r := promo.jours_restants(d)) is not None and r <= 1
                          for d in urgents),
                 canal="annonces", secours=corps)
             marquer(etat, cle)
@@ -568,14 +565,14 @@ def daemon():
         cle = f"semaine:{aujourd}"
         if maintenant.weekday() == config.RECAP_SEMAINE_JOUR and \
                 not deja_envoye(etat, cle) and \
-                _du(vue.a_heure(aujourd, config.RECAP_SEMAINE_HEURE, (18, 0)), maintenant):
+                _du(affichage.a_heure(aujourd, config.RECAP_SEMAINE_HEURE, (18, 0)), maintenant):
             lundi = aujourd + timedelta(days=(7 - aujourd.weekday()) % 7 or 7)
-            corps = vue.bloc_semaine(cours, lundi) + [""] + \
-                vue.bloc_devoirs(liste_devoirs, "📚 A faire cette semaine", horizon=7)
+            corps = affichage.bloc_semaine(cours, lundi) + [""] + \
+                affichage.bloc_devoirs(liste_devoirs, "📚 A faire cette semaine", horizon=7)
             envoyer_photo(
                 f"🗓️ Semaine du {lundi:%d/%m}",
-                vue.bloc_devoirs(liste_devoirs, "📚 À faire cette semaine",
-                                 horizon=7),
+                affichage.bloc_devoirs(liste_devoirs, "📚 À faire cette semaine",
+                                       horizon=7),
                 lambda: image.rendre(cours, lundi, lundi + timedelta(days=6),
                                      config.DONNEES / "recap-semaine.png",
                                      titre=f"Semaine du {lundi:%d/%m}"),
@@ -583,18 +580,18 @@ def daemon():
 
             # La semaine en chiffres, juste apres la grille : l'une dit quand,
             # l'autre dit combien. Les deux ensemble diraient trop.
-            semaine_a_venir = stats.semaine(cours, lundi)
+            semaine_a_venir = edt.semaine(cours, lundi)
             if not semaine_a_venir.vide:
                 envoyer_photo(
                     "📊 Ce que pèse la semaine",
-                    [f"**{vue.duree_fr(semaine_a_venir.total_minutes)}** de cours, "
+                    [f"**{affichage.duree_fr(semaine_a_venir.total_minutes)}** de cours, "
                      f"{semaine_a_venir.seances} séances, "
-                     f"{vue.duree_fr(semaine_a_venir.trous_minutes)} de trous."],
+                     f"{affichage.duree_fr(semaine_a_venir.trous_minutes)} de trous."],
                     lambda: image.rendre_stats(semaine_a_venir,
                                                config.DONNEES / "recap-stats.png",
                                                cours=cours),
                     couleur="info", canal="annonces",
-                    secours=stats.bloc(semaine_a_venir, cours))
+                    secours=edt.bloc_stats(semaine_a_venir, cours))
             marquer(etat, cle)
 
 
@@ -603,13 +600,13 @@ def creer_salons(categorie=""):
     """Le bot cree les salons dans la categorie et ecrit leurs
     identifiants dans config.yaml. Idempotent."""
     try:
-        guilde, salons = notif.creer_salons(categorie)
-    except EchecDiscord as e:
+        guilde, salons = affichage.creer_salons(categorie)
+    except affichage.EchecDiscord as e:
         print(f"[X] {e}")
         sys.exit(1)
 
     for canal, (ident, etat) in salons.items():
-        print(f"  {etat:10s} #{notif.SALONS[canal][0]:16s} {ident}  ({canal})")
+        print(f"  {etat:10s} #{affichage.SALONS[canal][0]:16s} {ident}  ({canal})")
 
     try:
         change = config.ecrire_salons({c: i for c, (i, _) in salons.items()},
@@ -630,14 +627,14 @@ def tester_salons():
         if canal in config.CANAUX_BOT_SEULEMENT and not config.salon_configure_bot(canal):
             print(f"-     {canal:10s} -> pas de salon dedie (facultatif)")
             continue
-        sujet = notif.SALONS[canal][1]
-        mode, cible = notif.destination(canal)
-        ok = envoyer(f"Test — #{notif.SALONS[canal][0]}",
+        sujet = affichage.SALONS[canal][1]
+        mode, cible = affichage.destination(canal)
+        ok = envoyer(f"Test — #{affichage.SALONS[canal][0]}",
                      [sujet + ".",
                       f"Ce salon recevra les messages de type `{canal}`."],
                      couleur="calme", canal=canal)
         visee = cible if mode == "bot" else "webhook ..." + str(cible)[-12:]
-        marque = "" if notif.salon_configure(canal) else "  (vide -> secours)"
+        marque = "" if affichage.salon_configure(canal) else "  (vide -> secours)"
         print(f"{'OK   ' if ok else 'ECHEC'} {canal:10s} -> {mode} {visee}{marque}")
 
 
@@ -650,6 +647,7 @@ def construire_parseur():
 
     sous.add_parser("config", help="verifier config.yaml sans rien envoyer")
     sous.add_parser("heure", help="le bot est-il bien a l'heure francaise ?")
+    sous.add_parser("uptime", help="surveiller le webmail (a lancer a part, en continu)")
 
     sp = sous.add_parser("salons", help="cree les salons Discord dans la categorie")
     sp.add_argument("--categorie", default="",
@@ -738,25 +736,25 @@ def construire_parseur():
 def commande_devoir(args):
     action = getattr(args, "action", None)
     if action == "add":
-        cours, _ = celcat.charger(hors_ligne=getattr(args, "hors_ligne", False))
+        cours, _ = edt.charger(hors_ligne=getattr(args, "hors_ligne", False))
         try:
-            echeance = dv.resoudre_echeance(args.pour, cours, args.matiere)
+            echeance = promo.resoudre_echeance(args.pour, cours, args.matiere)
         except ValueError as e:
             print(f"[X] {e}")
             sys.exit(1)
-        d = dv.ajouter(args.titre, args.matiere, echeance, args.type_, args.note)
-        print("Ajoute : " + vue.sans_markdown(vue.ligne_devoir(d)))
+        d = promo.ajouter_devoirs(args.titre, args.matiere, echeance, args.type_, args.note)
+        print("Ajoute : " + affichage.sans_markdown(affichage.ligne_devoir(d)))
     elif action == "list":
-        liste = dv.lire() if args.tout else dv.actifs()
+        liste = promo.lire_devoirs() if args.tout else promo.actifs()
         if not liste:
             print("Rien en attente. 😌")
-        for d in sorted(liste, key=lambda d: (dv.echeance_dt(d) or datetime.max)):
-            print(vue.sans_markdown(vue.ligne_devoir(d)))
+        for d in sorted(liste, key=lambda d: (promo.echeance_dt(d) or datetime.max)):
+            print(affichage.sans_markdown(affichage.ligne_devoir(d)))
     elif action == "fait":
-        print(f"devoir #{args.id} marque comme fait." if dv.marquer_fait(args.id)
+        print(f"devoir #{args.id} marque comme fait." if promo.marquer_fait(args.id)
               else f"[!] aucun devoir #{args.id}")
     elif action == "suppr":
-        d = dv.supprimer(args.id)
+        d = promo.supprimer_devoirs(args.id)
         print(f"« {d['titre']} » supprime." if d else f"[!] aucun devoir #{args.id}")
     else:
         print("Utilise : devoir add | list | fait | suppr")
@@ -788,6 +786,12 @@ def main():
     if cmd == "salons":
         creer_salons(args.categorie)
         return
+    if cmd == "uptime":
+        try:
+            main_uptime()
+        except KeyboardInterrupt:
+            print("\n[i] arret.", flush=True)
+        return
     if cmd == "init":
         tester_salons()
         return
@@ -801,18 +805,18 @@ def main():
         commande_devoir(args)
         return
 
-    cours, origine = celcat.charger(hors_ligne=hors_ligne)
-    liste_devoirs = dv.lire()
+    cours, origine = edt.charger(hors_ligne=hors_ligne)
+    liste_devoirs = promo.lire_devoirs()
 
     if cmd == "ics":
         vrais = [c for c in cours if c.est_cours]
-        chemin = vue.exporter_ics(vrais, liste_devoirs, args.sortie)
+        chemin = affichage.exporter_ics(vrais, liste_devoirs, args.sortie)
         print(f"Ecrit : {chemin} ({len(vrais)} cours, "
-              f"{len(dv.actifs(liste_devoirs))} devoirs) — source : {origine}")
+              f"{len(promo.actifs(liste_devoirs))} devoirs) — source : {origine}")
     elif cmd == "image":
         try:
-            debut = vue.lire_date(args.depuis, cours, date.today())
-            fin = vue.lire_date(args.jusqu_au, cours, debut + timedelta(days=6))
+            debut = affichage.lire_date(args.depuis, cours, date.today())
+            fin = affichage.lire_date(args.jusqu_au, cours, debut + timedelta(days=6))
         except ValueError as e:
             print(f"[X] {e}")
             sys.exit(1)
@@ -822,15 +826,15 @@ def main():
             print(f"[X] {e}")
             sys.exit(1)
         if args.discord:
-            ok = notif.envoyer_image(
-                chemin, f"Emploi du temps — {vue.jour_fr(debut, court=True)} "
-                        f"au {vue.jour_fr(fin, court=True)}", "", canal="annonces")
+            ok = affichage.envoyer_image(
+                chemin, f"Emploi du temps — {affichage.jour_fr(debut, court=True)} "
+                        f"au {affichage.jour_fr(fin, court=True)}", "", canal="annonces")
             print("envoye." if ok else "echec de l'envoi.")
         else:
-            print(f"Ecrit : {chemin}  ({vue.jour_fr(debut)} -> {vue.jour_fr(fin)})")
+            print(f"Ecrit : {chemin}  ({affichage.jour_fr(debut)} -> {affichage.jour_fr(fin)})")
     elif cmd == "photo":
         try:
-            jour = vue.lire_date(args.jour, cours, date.today())
+            jour = affichage.lire_date(args.jour, cours, date.today())
         except ValueError as e:
             print(f"[X] {e}")
             sys.exit(1)
@@ -840,39 +844,39 @@ def main():
             print(f"[X] {e}")
             sys.exit(1)
         if args.discord:
-            ok = notif.envoyer_image(chemin, vue.jour_relatif(jour).capitalize(),
-                                     legende_jour(cours, liste_devoirs, jour),
-                                     canal="annonces")
+            ok = affichage.envoyer_image(chemin, affichage.jour_relatif(jour).capitalize(),
+                                         legende_jour(cours, liste_devoirs, jour),
+                                         canal="annonces")
             print("envoye." if ok else "echec de l'envoi.")
         else:
-            print(f"Ecrit : {chemin}  ({vue.jour_fr(jour)})")
+            print(f"Ecrit : {chemin}  ({affichage.jour_fr(jour)})")
     elif cmd == "actu":
-        liste = actu.historique(args.jours)
+        liste = edt.historique_actu(args.jours)
         if not liste:
-            dernier = actu.quand_dernier()
+            dernier = edt.quand_dernier()
             print(f"Rien n'a bouge depuis {args.jours} jours."
                   + (f" Dernier changement : {dernier:%d/%m a %H:%M}." if dernier else ""))
             return
         if args.discord:
-            titre = chg.titre(liste)
+            titre = edt.titre(liste)
             envoyer_photo(titre, resume_changements(liste),
                           lambda: image.rendre_changements(liste, args.sortie,
                                                            titre=titre),
-                          couleur=chg.couleur(liste), canal="alertes",
+                          couleur=edt.couleur(liste), canal="alertes",
                           ping=config.PING_CHANGEMENTS,
-                          secours=chg.bloc(liste)[0])
+                          secours=edt.bloc_changements(liste)[0])
             print("envoye.")
             return
-        lignes, _urgent = chg.bloc(liste)
-        print(f"\n=== {vue.sans_markdown(chg.titre(liste))} ===")
-        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        lignes, _urgent = edt.bloc_changements(liste)
+        print(f"\n=== {affichage.sans_markdown(edt.titre(liste))} ===")
+        print(affichage.sans_markdown("\n".join(lignes)) + "\n")
         try:
             print(f"Image : {image.rendre_changements(liste, args.sortie)}")
         except image.PillowManquant:
             pass
     elif cmd == "stats" and args.tout:
-        b = stats.bilan(cours)
-        lignes = stats.bloc_bilan(b)
+        b = edt.bilan(cours)
+        lignes = edt.bloc_bilan(b)
         if args.discord:
             envoyer_photo("📚 Tout l'emploi du temps", lignes[:1],
                           lambda: image.rendre_bilan(b, args.sortie, cours=cours),
@@ -880,19 +884,19 @@ def main():
             print("envoye.")
             return
         print("\n=== Tout l'emploi du temps ===")
-        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        print(affichage.sans_markdown("\n".join(lignes)) + "\n")
         try:
             print(f"Image : {image.rendre_bilan(b, args.sortie, cours=cours)}")
         except image.PillowManquant:
             pass
     elif cmd == "stats":
-        lundi = celcat.semaine_de(date.today()) + timedelta(days=7 * args.semaine)
-        semaine_ = stats.semaine(cours, lundi)
-        note = stats.avertissement(semaine_, cours)
+        lundi = edt.semaine_de(date.today()) + timedelta(days=7 * args.semaine)
+        semaine_ = edt.semaine(cours, lundi)
+        note = edt.avertissement(semaine_, cours)
         if semaine_.vide:
             print(f"Aucun cours connu pour la semaine du {lundi:%d/%m}.")
             return
-        lignes = stats.bloc(semaine_, cours)
+        lignes = edt.bloc_stats(semaine_, cours)
         if args.discord:
             envoyer_photo(f"📊 Ta semaine — {semaine_.libelle}", lignes[:1],
                           lambda: image.rendre_stats(semaine_, args.sortie,
@@ -903,51 +907,51 @@ def main():
         if note:
             print(f"[!] {note}")
         print(f"\n=== Ta semaine — {semaine_.libelle} ===")
-        print(vue.sans_markdown("\n".join(lignes)) + "\n")
+        print(affichage.sans_markdown("\n".join(lignes)) + "\n")
         try:
             print(f"Image : {image.rendre_stats(semaine_, args.sortie, cours=cours, avertissement=note)}")
         except image.PillowManquant:
             pass
     elif cmd == "meteo":
         jour_ = date.today() + timedelta(days=max(0, min(args.jours, 3)))
-        resume = meteo.jour(jour_)
+        resume = edt.jour(jour_)
         if resume is None:
             print("Pas de meteo : Open-Meteo injoignable, ou jour hors prevision.")
             return
-        jc = [c for c in celcat.du_jour(cours, jour_) if c.est_cours]
-        depart = vue.heure_lever(jc[0])[1] if jc and not jc[0].a_distance else None
-        lignes = [f"{vue.jour_fr(jour_).capitalize()} a {config.METEO_LIEU}",
+        jc = [c for c in edt.du_jour(cours, jour_) if c.est_cours]
+        depart = affichage.heure_lever(jc[0])[1] if jc and not jc[0].a_distance else None
+        lignes = [f"{affichage.jour_fr(jour_).capitalize()} a {config.METEO_LIEU}",
                   resume.resume()]
-        lignes += meteo.bloc_depart(depart, jc[0].debut if jc else None, jour_)[1:]
+        lignes += edt.bloc_depart(depart, jc[0].debut if jc else None, jour_)[1:]
         sortir("Meteo", lignes, vers_discord, "info", canal="commandes")
     elif cmd == "tableaux":
-        ok_statut = statut.publier(cours, liste_devoirs)
-        ok_edt = statut.publier_tableau_edt(cours, liste_devoirs)
+        ok_statut = affichage.publier(cours, liste_devoirs)
+        ok_edt = affichage.publier_tableau_edt(cours, liste_devoirs)
         print(f"#statut : {'ok' if ok_statut else 'echec'} · "
               f"#edt : {'ok' if ok_edt else 'echec'}")
     elif cmd == "prochain":
-        sortir("Prochain cours", vue.bloc_prochain(cours, liste_devoirs),
+        sortir("Prochain cours", affichage.bloc_prochain(cours, liste_devoirs),
                vers_discord, "cours", canal="commandes")
     elif cmd in ("aujourdhui", "demain"):
         jour = date.today() + (timedelta(days=1) if cmd == "demain" else timedelta())
-        lignes = vue.bloc_journee(cours, liste_devoirs, jour,
-                                  avec_reveil=cmd == "demain")
-        lignes += [""] + vue.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7)
+        lignes = affichage.bloc_journee(cours, liste_devoirs, jour,
+                                        avec_reveil=cmd == "demain")
+        lignes += [""] + affichage.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7)
         if vers_discord:
-            envoyer_photo(vue.jour_relatif(jour).capitalize(),
+            envoyer_photo(affichage.jour_relatif(jour).capitalize(),
                           legende_jour(cours, liste_devoirs, jour),
                           lambda: image.rendre_jour(cours, liste_devoirs, jour),
                           canal="annonces", secours=lignes)
             print("envoye.")
         else:
-            sortir(vue.jour_relatif(jour).capitalize(), lignes, False, "cours")
+            sortir(affichage.jour_relatif(jour).capitalize(), lignes, False, "cours")
     elif cmd == "semaine":
-        lundi = celcat.semaine_de(date.today())
-        lignes = vue.bloc_semaine(cours, lundi) + [""] + \
-            vue.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7)
+        lundi = edt.semaine_de(date.today())
+        lignes = affichage.bloc_semaine(cours, lundi) + [""] + \
+            affichage.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7)
         if vers_discord:
             envoyer_photo(f"Semaine du {lundi:%d/%m}",
-                          vue.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7),
+                          affichage.bloc_devoirs(liste_devoirs, "📚 A faire", horizon=7),
                           lambda: image.rendre(cours, lundi,
                                                lundi + timedelta(days=6),
                                                titre=f"Semaine du {lundi:%d/%m}"),
@@ -956,7 +960,134 @@ def main():
         else:
             sortir(f"Semaine du {lundi:%d/%m}", lignes, False)
     elif cmd == "libre":
-        sortir("Creneaux libres", vue.creneaux_libres(cours), vers_discord, "calme")
+        sortir("Creneaux libres", affichage.creneaux_libres(cours), vers_discord, "calme")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  LA SURVEILLANCE DU WEBMAIL  (ex-uptime.py)
+# ════════════════════════════════════════════════════════════════════════════
+# Surveille le webmail CYU et previent sur Discord quand il tombe ou revient.
+#
+# Script independant du reste : il ne touche ni a CELCAT ni aux devoirs, il ne
+# partage que l'aiguillage Discord. A lancer a cote du bot si tu veux savoir
+# quand la boite mail est de nouveau joignable.
+#
+#     python3 assistant.py uptime
+#
+# Les recaps « tout va bien » partent dans #logs, les pannes dans #alertes avec
+# mention. A chaque verification, l'etat est aussi ecrit dans
+# donnees/webmail.json : c'est ce que lit le panneau de #statut, qui tourne dans
+# l'autre processus.
+
+
+TIMEOUT = 15
+HEADERS = {"User-Agent": "Mozilla/5.0 uptime-monitor/1.0"}
+
+# Pages d'erreur de la federation Shibboleth. L'IdP CYU les sert avec un corps
+# HTML et un code 4xx, JAMAIS une 5xx : sans ce test, une panne de SSO passe
+# pour un site en ligne.
+ERREURS_SSO = (
+    "Unable to Respond",          # version anglaise du template Shibboleth
+    "Impossible de repondre",     # version francaise, sans accents
+    "Impossible de répondre",     # version francaise, avec accents
+    "stale request",              # requete SAML perimee
+    "Web Login Service - Message Security Error",
+)
+
+# Ce qu'on doit trouver au bout de la chaine pour dire que la boite est
+# joignable : le formulaire de connexion de l'IdP. C'est le plus loin qu'on
+# puisse aller sans identifiants, donc c'est ca, « le service repond ».
+# Si CYU refait son template de login, ce marqueur devient faux et declenche
+# une fausse alerte : c'est la ligne a mettre a jour.
+ATTENDU = 'type="password"'
+
+
+def check():
+    """(up: bool, detail: str). UP = on atteint l'ecran de connexion.
+
+    Ce que testait la premiere version : « le serveur repond avec un code
+    < 500 ». Insuffisant ici, parce que /mail n'est pas une page mais le debut
+    d'une chaine SAML :
+
+        mail.etu.cyu.fr/mail
+          -> 302  sp.partage.renater.fr/ucp        (le SP, service Partage/RENATER)
+          -> 302  idp.cyu.fr/idp/profile/SAML2/... (l'IdP, qui authentifie)
+
+    Quand la federation est cassee, l'IdP repond HTTP 400 avec sa page « Unable
+    to Respond ». 400 < 500, donc l'ancien test annoncait UP alors que la boite
+    mail etait totalement inaccessible. On verifie donc trois choses : le code
+    HTTP, l'absence de page d'erreur Shibboleth, et la presence du formulaire.
+    """
+    t0 = time.monotonic()
+    try:
+        # Pas de stream=True : il faut lire le corps pour distinguer une vraie
+        # page de connexion d'une page d'erreur de la federation.
+        r = requests.get(config.WEBMAIL_URL, headers=HEADERS, timeout=TIMEOUT)
+    except requests.Timeout:
+        return False, f"timeout > {TIMEOUT}s"
+    except requests.RequestException as e:
+        return False, f"{type(e).__name__}"
+
+    ms = (time.monotonic() - t0) * 1000
+    hote = urlsplit(r.url).netloc or "?"
+
+    if r.status_code >= 400:
+        faute = next((m for m in ERREURS_SSO if m in r.text), None)
+        motif = f' - "{faute}"' if faute else ""
+        return False, f"HTTP {r.status_code} sur {hote}{motif} ({ms:.0f} ms)"
+
+    faute = next((m for m in ERREURS_SSO if m in r.text), None)
+    if faute:
+        return False, f'SSO casse sur {hote} - "{faute}" (HTTP {r.status_code})'
+
+    if ATTENDU not in r.text:
+        return False, (f"pas de formulaire de connexion sur {hote} "
+                       f"(HTTP {r.status_code}, {len(r.text)} octets)")
+
+    return True, f"HTTP {r.status_code} sur {hote} en {ms:.0f} ms"
+
+
+def main_uptime():
+    up, detail = check()
+    affichage.enregistrer_webmail(up, detail)
+    affichage.simple(f"Monitoring du webmail demarre sur {config.WEBMAIL_URL}\n"
+                     f"Etat initial : {'OK' if up else 'INJOIGNABLE'} ({detail})",
+                     canal="logs")
+    print(f"start | {'UP' if up else 'DOWN'} | {detail}", flush=True)
+
+    precedent = up
+    n = 0          # essais depuis le dernier recap
+    ok = 0         # essais reussis depuis le dernier recap
+
+    while True:
+        time.sleep(config.WEBMAIL_INTERVAL)
+
+        up, detail = check()
+        # Ecrit a chaque tour, meme sans changement : le panneau de #statut
+        # affiche l'age de la derniere verification, donc il a besoin de
+        # l'horodatage autant que de l'etat.
+        affichage.enregistrer_webmail(up, detail)
+        n += 1
+        if up:
+            ok += 1
+        print(f"{datetime.now():%H:%M:%S} | {'UP' if up else 'DOWN'} | {detail}",
+              flush=True)
+
+        # changement d'etat : la seule chose qui merite une mention
+        if up and not precedent:
+            affichage.simple(f"Webmail de retour en ligne : {config.WEBMAIL_URL} "
+                             f"({detail})", ping=True, canal="alertes")
+        elif not up and precedent:
+            affichage.simple(f"Webmail injoignable : {config.WEBMAIL_URL} ({detail})",
+                             ping=True, canal="alertes")
+        precedent = up
+
+        # recap periodique, dans les logs
+        if n >= config.WEBMAIL_HEARTBEAT:
+            affichage.simple(f"Monitoring webmail toujours actif. {ok}/{n} essais OK "
+                             f"sur la derniere periode ({detail})", canal="logs")
+            n = 0
+            ok = 0
 
 
 if __name__ == "__main__":

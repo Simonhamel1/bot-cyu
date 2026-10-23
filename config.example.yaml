@@ -139,7 +139,7 @@ cyu:
   # encore rien.
   horizon_jours: 28
 
-  # Le webmail surveille par uptime.py.
+  # Le webmail surveille par `python assistant.py uptime`.
   webmail_url: "https://mail.etu.cyu.fr/mail"
   webmail_intervalle: 60      # secondes entre deux essais
   webmail_heartbeat: 60       # recap dans #logs tous les N essais (~1 h)

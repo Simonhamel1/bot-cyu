@@ -67,7 +67,7 @@ que pour ce qui touche aujourd'hui ou demain.)
 ### Et il ne raconte pas n'importe quoi
 
 Un bot qui crie au loup, on finit par le couper. Quatre garde-fous, dans
-`actu.py` :
+`edt.py` (section « le suivi des changements ») :
 
 | Le piège | Ce qu'il fait |
 | --- | --- |
@@ -537,13 +537,13 @@ prochain:vba               ton prochain cours de VBA, avec son heure exacte
 
 ## Surveiller le webmail
 
-`uptime.py` est indépendant du reste : il vérifie que
+`python assistant.py uptime` tourne à part du bot, en continu : il vérifie que
 [mail.etu.cyu.fr](https://mail.etu.cyu.fr/mail) répond, prévient dans
 `#alertes` quand il tombe ou revient, et alimente la ligne « Webmail » du
 panneau de `#statut`.
 
 ```bash
-python uptime.py
+python assistant.py uptime
 ```
 
 Il ne teste pas seulement « le serveur répond ». Le webmail est derrière une
@@ -673,30 +673,19 @@ systemctl --user stop assistant-cyu
 | --- | --- |
 | `config.yaml` | **toute** la configuration et les secrets — jamais sur GitHub |
 | `config.example.yaml` | toutes les options documentées, et les valeurs par défaut |
-| `config.py` | lit le YAML, complète avec l'exemple, expose les constantes |
-| `stockage.py` | lit et écrit les JSON de `donnees/` : écriture atomique, copie `.bak` relue si le fichier est abîmé, verrou par fichier pour que deux votes simultanés ne s'écrasent pas |
-| `celcat.py` | connexion CELCAT, lecture des cours, cache disque |
-| `changements.py` | rapproche deux versions de l'EDT et dit ce qui a bougé |
-| `vue.py` | toute la mise en forme texte : journée, grille, devoirs, .ics |
+| `config.py` | lit le YAML, complète avec l'exemple, expose les constantes — et le **stockage** des JSON de `donnees/` (écriture atomique, copie `.bak` relue si un fichier est abîmé, verrou par fichier) |
+| `edt.py` | **l'emploi du temps** : la connexion CELCAT et le cache, la détection des changements (annulé, déplacé, changement de salle…) et leur suivi (référence sur disque, garde-fous, journal d'un mois), ce que pèse une semaine (stats), la météo du trajet |
+| `promo.py` | **ce que la promo garde sur disque** : le carnet de devoirs, les rappels (et la grammaire de « quand »), les prédictions, les sondages, les anniversaires, les examens en événements Discord, le quiz Pokémon |
+| `ecole.py` | **les documents de l'école**, lus sans dépendance : la maquette M3C (UE, ECTS, coefficients) et le calendrier d'alternance (le PDF, recalé sur de vraies dates) |
+| `affichage.py` | **tout ce qui met en forme et envoie** : le texte (journée, grille, devoirs, .ics), les cartes Discord, l'aiguillage vers les salons, les tableaux vivants de `#statut` et `#edt` |
 | `image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours, le tableau de bord de la semaine (Pillow) |
-| `actu.py` | le suivi des changements : référence sur disque, garde-fous, anti-doublon, journal d'un mois |
-| `devoirs.py` | le carnet de devoirs et ses échéances « prochain cours de X » |
-| `meteo.py` | la météo Open-Meteo : le temps de ton trajet, le parapluie, la marge de pluie |
-| `stats.py` | ce que pèse une semaine : heures, matières, trous, archive des semaines |
-| `predictions.py` | le jeu des prédictions : votes, tranchage par l'auteur, classement |
-| `sondages.py` | les sondages Discord : lire les réponses tapées, construire le sondage, retenir ceux du bot, mettre en forme le résultat |
-| `rappels.py` | les rappels : la grammaire de « quand » (`demain 9h`, `dans 2h`, `lundi 14h`…) et leur stockage |
-| `anniversaires.py` | les anniversaires : qui, quand, le prochain, l'âge |
-| `maquette.py` | le classeur M3C de la promo, lu sans dépendance : UE, matières, ECTS, coefficients, mode d'évaluation |
-| `alternance.py` | le calendrier d'alternance de la promo, lu sans dépendance : les aplats de couleur du PDF, recalés sur de vraies dates |
-| `pokemon.py` | le quiz « Qui est ce Pokémon ? » : le catalogue PokéAPI, le tirage, les points et le classement |
-| `evenements.py` | les examens en événements Discord : ce qui devrait exister, ce qu'il faut créer, modifier, retirer |
-| `notif.py` | l'aiguillage Discord : qui poste quoi, où, et quoi se réécrit |
-| `statut.py` | le panneau de `#statut` et le tableau de `#edt` |
-| `assistant.py` | le daemon et la ligne de commande |
-| `interface.py` | l'allure du bot : les cartes (conteneur coloré, photo intégrée, boutons persistants) |
+| `assistant.py` | le daemon, la ligne de commande, et la surveillance du webmail (`python assistant.py uptime`) |
 | `bot.py` | le bot Discord : commandes slash, navigation par boutons, panneau, formulaires, et la boucle `tic` (rappels, anniversaires, résultats de sondages, point des prédictions, événements) |
-| `uptime.py` | la surveillance du webmail |
+
+Chaque fichier qui en regroupe plusieurs est découpé en sections, avec un
+bandeau `═══ … (ex-xxx.py)` en tête de chacune : on y retrouve l'ancien module
+et son explication. Les fonctions qui portaient le même nom dans deux anciens
+modules ont pris son nom en suffixe (`lire_devoirs`, `lire_rappels`…).
 | `installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
 | `deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
 | `assistant-cyu.service` | l'unité systemd du bot |

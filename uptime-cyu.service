@@ -1,6 +1,6 @@
-# Service systemd UTILISATEUR pour la surveillance du webmail (uptime.py).
+# Service systemd UTILISATEUR pour la surveillance du webmail (assistant.py uptime).
 #
-# OPTIONNEL et INDEPENDANT du bot : uptime.py est un second processus. Sans
+# OPTIONNEL et INDEPENDANT du bot : `assistant.py uptime` est un second processus. Sans
 # lui, le bot tourne normalement, seule la ligne « Webmail » du panneau
 # #statut reste vide.
 #
@@ -16,7 +16,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/bot-cyu
-ExecStart=/usr/bin/env python3 %h/bot-cyu/uptime.py
+ExecStart=/usr/bin/env python3 %h/bot-cyu/assistant.py uptime
 Restart=always
 RestartSec=60
 Environment=PYTHONUNBUFFERED=1

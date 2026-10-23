@@ -22,7 +22,7 @@
 # touche jamais a config.yaml ni au dossier donnees/ (cache + carnet de devoirs).
 #
 # Options :
-#   --avec-uptime    installe aussi la surveillance du webmail (uptime.py)
+#   --avec-uptime    installe aussi la surveillance du webmail (assistant.py uptime)
 #   --sans-uptime    desinstalle cette surveillance
 #   --sans-demarrer  tout preparer sans lancer le service
 #
