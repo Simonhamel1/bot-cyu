@@ -1,7 +1,7 @@
-# Vérifie à chaque push que le bot s'installerait et démarrerait sur le serveur :
+# Vérifie à chaque push que le bot se déploierait, puis le déploie (main).
 # mêmes dépendances, même Python (Ubuntu 24.04 = 3.12), mêmes scripts.
 # Aucun secret n'est utilisé : config.yaml est recréé depuis l'exemple.
-name: Déploiement possible ?
+name: Déploiement
 
 on:
   push:
@@ -42,3 +42,29 @@ jobs:
           # %h/bot-cyu doit pointer sur un vrai dossier pour que systemd valide ExecStart.
           ln -s "$GITHUB_WORKSPACE" "$HOME/bot-cyu"
           systemd-analyze verify --user deploiement/*.service
+
+  # Seulement si tout est vert, et seulement pour main. La clé ne peut lancer
+  # que ~/outils/deployer.sh bot sur le serveur (commande forcée) ; s'il échoue,
+  # il revient tout seul à la version d'avant et ce job passe au rouge.
+  deployer:
+    needs: verifier
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Un déploiement à la fois ; le suivant attend au lieu d'annuler.
+    concurrency:
+      group: deploiement
+      cancel-in-progress: false
+    timeout-minutes: 15
+    steps:
+      - name: Déployer sur le serveur
+        env:
+          CLE: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOTE: ${{ secrets.DEPLOY_HOST }}
+          EMPREINTE: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$CLE" > ~/.ssh/deploiement && chmod 600 ~/.ssh/deploiement
+          # Empreinte du serveur figée : pas de « trust on first use ».
+          printf '%s\n' "$EMPREINTE" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploiement -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=30 "$HOTE" "$GITHUB_SHA"
