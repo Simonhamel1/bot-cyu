@@ -643,13 +643,13 @@ def _grille_texte(cours, debut, fin):
     return "Période", lignes, "cours"
 
 
-async def vue_edt(quand="", affichage="photo"):
+async def vue_edt(quand="", forme="photo"):
     """Le point d'entree de /edt : une journee ou une grille selon `quand`."""
     cours, _ = await _donnees()
     debut, fin, mode = periode(quand, cours)
     if mode == "jour":
-        return await vue_jour(debut, texte=affichage == "texte")
-    return await vue_grille(debut, fin, texte=affichage == "texte")
+        return await vue_jour(debut, texte=forme == "texte")
+    return await vue_grille(debut, fin, texte=forme == "texte")
 
 
 # --- Le prochain cours -------------------------------------------------------
@@ -1343,7 +1343,7 @@ def _image_alternance(cal, debut, fin, mode, titre, sous_titre, aujourd_hui):
         aujourd_hui=aujourd_hui)
 
 
-async def vue_alternance(quand="", affichage="photo"):
+async def vue_alternance(quand="", forme="photo"):
     """/calendrier — le rythme de l'alternance, en photo.
 
     Le PDF de l'ecole est un tableau de treize colonnes qu'on ne lit pas sur
@@ -1383,7 +1383,7 @@ async def vue_alternance(quand="", affichage="photo"):
     menus = _menu_alternance(cal, debut, mode)
     lignes = alt.bloc_resume(cal, auj)
 
-    if affichage == "texte":
+    if forme == "texte":
         lignes = lignes + [""] + (alt.bloc_periodes(cal, debut, fin, aujourd_hui=auj)
                                   or ["-# Aucune période sur cette fenêtre."])
         return carte(titre, lignes, "info", sous_titre=sous, boutons=boutons,
@@ -3287,10 +3287,11 @@ async def _commande(inter, coroutine, ephemere=False):
 @app_commands.describe(
     quand="une date (12/10), un jour (lundi), demain, la semaine, +14… "
           "— aujourd'hui par défaut",
-    affichage="photo par défaut ; texte si tu préfères copier-coller")
-@app_commands.choices(affichage=AFFICHAGE_CHOIX)
+    forme="photo par défaut ; texte si tu préfères copier-coller")
+@app_commands.choices(forme=AFFICHAGE_CHOIX)
+@app_commands.rename(forme="affichage")
 async def cmd_edt(inter: discord.Interaction, quand: str = "",
-                  affichage: str = "photo"):
+                  forme: str = "photo"):
     # La date est lue AVANT le defer : seule la premiere reponse peut etre
     # ephemere, et une erreur de saisie n'a rien a faire dans le salon.
     cours, _ = await _donnees()
@@ -3302,7 +3303,7 @@ async def cmd_edt(inter: discord.Interaction, quand: str = "",
                            f"`+14`.", "Date incomprise"), ephemeral=True)
         return
     await inter.response.defer(thinking=True)
-    vue_, fichiers = await vue_edt(quand, affichage)
+    vue_, fichiers = await vue_edt(quand, forme)
     await repondre(inter, vue_, fichiers)
 
 
@@ -3441,10 +3442,11 @@ async def cmd_ects(inter: discord.Interaction, semestre: str = ""):
 @app_commands.describe(
     quand="un mois (novembre, janvier 27), une durée (+21, 3 mois), ou « année » "
           "— ce mois-ci par défaut",
-    affichage="photo par défaut ; texte si tu préfères copier-coller")
-@app_commands.choices(affichage=AFFICHAGE_CHOIX)
+    forme="photo par défaut ; texte si tu préfères copier-coller")
+@app_commands.choices(forme=AFFICHAGE_CHOIX)
+@app_commands.rename(forme="affichage")
 async def cmd_calendrier(inter: discord.Interaction, quand: str = "",
-                         affichage: str = "photo"):
+                         forme: str = "photo"):
     # La saisie est lue AVANT le defer : seule la premiere reponse peut etre
     # ephemere, et une erreur de saisie n'a rien a faire dans le salon.
     try:
@@ -3457,7 +3459,7 @@ async def cmd_calendrier(inter: discord.Interaction, quand: str = "",
                            f"`3 mois`, ou `année`.", "Date incomprise"),
             ephemeral=True)
         return
-    await _commande(inter, vue_alternance(quand, affichage))
+    await _commande(inter, vue_alternance(quand, forme))
 
 
 @cmd_calendrier.autocomplete("quand")
