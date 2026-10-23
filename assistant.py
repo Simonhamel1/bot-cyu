@@ -44,7 +44,6 @@ commandes Discord dans le meme processus.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -61,6 +60,7 @@ import meteo
 import notif
 import stats
 import statut
+import stockage
 import vue
 from celcat import EchecConnexion
 from notif import EchecDiscord
@@ -118,11 +118,7 @@ def sortir(titre, lignes, vers_discord, couleur="info", canal="annonces"):
 
 # --- Etat du daemon (anti-doublon) -------------------------------------------
 def lire_etat():
-    try:
-        data = json.loads(config.FICHIER_ETAT.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(config.FICHIER_ETAT, {})
 
 
 def deja_envoye(etat, cle):
@@ -136,9 +132,7 @@ def marquer(etat, cle):
     envoyes[cle] = datetime.now().isoformat(timespec="seconds")
     limite = (datetime.now() - timedelta(days=30)).isoformat()
     etat["envoyes"] = {k: v for k, v in envoyes.items() if v >= limite}
-    config.preparer_dossiers()
-    config.FICHIER_ETAT.write_text(json.dumps(etat, ensure_ascii=False, indent=1),
-                                   encoding="utf-8")
+    stockage.ecrire(config.FICHIER_ETAT, etat)
 
 
 def _du(moment, maintenant, fenetre_min=5):
@@ -565,7 +559,8 @@ def daemon():
                 lambda: image.rendre_jour(cours, liste_devoirs, demain,
                                           config.DONNEES / "briefing-soir.png"),
                 couleur="info",
-                ping=any((dv.jours_restants(d) or 9) <= 1 for d in urgents),
+                ping=any((r := dv.jours_restants(d)) is not None and r <= 1
+                         for d in urgents),
                 canal="annonces", secours=corps)
             marquer(etat, cle)
 

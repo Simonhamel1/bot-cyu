@@ -15,13 +15,13 @@ de 55 caracteres, de 1 heure a 32 jours.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
 
 import discord
 
 import config
+import stockage
 
 FICHIER = config.FICHIER_SONDAGES
 
@@ -105,19 +105,14 @@ def duree_texte(heures):
 
 # --- Les sondages du bot, en cours -------------------------------------------
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (ValueError, OSError):
-        return []
+    return stockage.lire(FICHIER, [])
 
 
 def ecrire(liste):
-    config.preparer_dossiers()
-    FICHIER.write_text(json.dumps(liste, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+    stockage.ecrire(FICHIER, liste)
 
 
+@stockage.exclusif(FICHIER)
 def suivre(message_id, salon_id, fin, question, auteur_id):
     """Retenir un sondage pour en annoncer le resultat a la fin."""
     liste = [s for s in lire() if str(s.get("message_id")) != str(message_id)]
@@ -128,6 +123,7 @@ def suivre(message_id, salon_id, fin, question, auteur_id):
     ecrire(liste)
 
 
+@stockage.exclusif(FICHIER)
 def oublier(message_id):
     liste = lire()
     reste = [s for s in liste if str(s.get("message_id")) != str(message_id)]
@@ -157,6 +153,7 @@ def a_relever(maintenant=None, liste=None):
     return sortie
 
 
+@stockage.exclusif(FICHIER)
 def marquer_lecture(message_id, maintenant=None):
     liste = lire()
     for s in liste:

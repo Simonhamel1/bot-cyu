@@ -674,6 +674,7 @@ systemctl --user stop assistant-cyu
 | `config.yaml` | **toute** la configuration et les secrets — jamais sur GitHub |
 | `config.example.yaml` | toutes les options documentées, et les valeurs par défaut |
 | `config.py` | lit le YAML, complète avec l'exemple, expose les constantes |
+| `stockage.py` | lit et écrit les JSON de `donnees/` : écriture atomique, copie `.bak` relue si le fichier est abîmé, verrou par fichier pour que deux votes simultanés ne s'écrasent pas |
 | `celcat.py` | connexion CELCAT, lecture des cours, cache disque |
 | `changements.py` | rapproche deux versions de l'EDT et dit ce qui a bougé |
 | `vue.py` | toute la mise en forme texte : journée, grille, devoirs, .ics |

@@ -42,6 +42,7 @@ from datetime import date, datetime, timedelta
 import celcat
 import changements as chg
 import config
+import stockage
 
 FICHIER_REFERENCE = config.DONNEES / "reference.json"
 FICHIER_JOURNAL = config.DONNEES / "actu.json"
@@ -75,17 +76,8 @@ def dict_en_cours(d):
         categorie=d.get("categorie", ""), campus=d.get("campus", ""))
 
 
-def _lire_json(chemin, defaut):
-    try:
-        data = json.loads(chemin.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return defaut
-    return data if isinstance(data, type(defaut)) else defaut
-
-
-def _ecrire_json(chemin, data):
-    config.preparer_dossiers()
-    chemin.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+_lire_json = stockage.lire
+_ecrire_json = stockage.ecrire
 
 
 # --- La reference ------------------------------------------------------------
@@ -141,6 +133,7 @@ def journal_lire():
     return _lire_json(FICHIER_JOURNAL, [])
 
 
+@stockage.exclusif(FICHIER_JOURNAL)
 def journal_ajouter(liste):
     """Enregistre des changements annonces, et purge ce qui est trop vieux."""
     if not liste:

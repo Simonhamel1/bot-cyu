@@ -13,11 +13,11 @@ Sur disque, un dictionnaire par identifiant Discord :
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date
 
 import config
+import stockage
 from celcat import normaliser
 from vue import MOIS
 
@@ -29,18 +29,14 @@ RE_MOTS = re.compile(r"^(\d{1,2})(?:er)?\s+([a-z]+)(?:\s+(\d{4}))?$")
 
 # --- Lecture et ecriture -----------------------------------------------------
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(FICHIER, {})
 
 
 def ecrire(data):
-    config.preparer_dossiers()
-    FICHIER.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    stockage.ecrire(FICHIER, data)
 
 
+@stockage.exclusif(FICHIER)
 def definir(user_id, nom, jour, mois, annee=None):
     data = lire()
     data[str(user_id)] = {"nom": str(nom)[:60], "jour": int(jour), "mois": int(mois),
@@ -49,6 +45,7 @@ def definir(user_id, nom, jour, mois, annee=None):
     return data[str(user_id)]
 
 
+@stockage.exclusif(FICHIER)
 def retirer(user_id):
     data = lire()
     if data.pop(str(user_id), None) is None:

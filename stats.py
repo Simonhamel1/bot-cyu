@@ -23,12 +23,12 @@ l'affichage : additionner des « 1h30 » est le meilleur moyen de se tromper.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import celcat
 import config
+import stockage
 import vue
 
 FICHIER = config.FICHIER_SEMAINES
@@ -404,11 +404,7 @@ def bloc_bilan(b):
 # impossible a recalculer. On garde donc le total au passage, une ligne par
 # semaine — quelques octets pour une comparaison qui, sinon, n'existerait pas.
 def _lire_historique():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(FICHIER, {})
 
 
 def archiver(s):
@@ -438,9 +434,7 @@ def archiver(s):
     for vieux in sorted(data)[:-SEMAINES_GARDEES]:
         data.pop(vieux, None)
     try:
-        config.preparer_dossiers()
-        FICHIER.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                           encoding="utf-8")
+        stockage.ecrire(FICHIER, data)
     except OSError as e:
         print(f"[!] historique des semaines non ecrit : {e}", flush=True)
         return False

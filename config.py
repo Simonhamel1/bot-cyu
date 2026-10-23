@@ -604,11 +604,11 @@ def resume():
         f"  rappel premier cours {premier}",
         f"  relance devoirs      {relance}",
         f"  silence              {SILENCE_DE or '-'} -> {SILENCE_A or '-'}",
-        f"  meteo                " + (f"{METEO_LIEU} ({METEO_LAT:.4f}, {METEO_LON:.4f})"
+        "  meteo                " + (f"{METEO_LIEU} ({METEO_LAT:.4f}, {METEO_LON:.4f})"
                                       if METEO_ACTIVE else "desactivee"),
-        f"  anniversaires        " + (f"a {ANNIVERSAIRES_HEURE} dans #annonces"
+        "  anniversaires        " + (f"a {ANNIVERSAIRES_HEURE} dans #annonces"
                                       if ANNIVERSAIRES else "desactives"),
-        f"  examens -> evenements" + (f" oui, {EVENEMENTS_HORIZON_JOURS} jours en avant"
+        "  examens -> evenements" + (f" oui, {EVENEMENTS_HORIZON_JOURS} jours en avant"
                                       if EVENEMENTS_EXAMENS else " non"),
         f"  sondages             {SONDAGE_DUREE_HEURES} h par defaut"
         + (", resultat annonce" if SONDAGE_RESULTATS else ""),

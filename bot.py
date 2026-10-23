@@ -71,7 +71,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import re
 import sys
 import threading
@@ -104,6 +103,7 @@ import rappels as rp
 import sondages as sd
 import stats
 import statut as st
+import stockage
 import vue
 
 # Le daemon tourne-t-il dans le meme processus que le bot ? Mets False si tu
@@ -760,7 +760,8 @@ async def vue_devoirs(page=0):
                      (f"{d.get('matiere') or ''} {_quand_devoir(d)[0]}"
                       .replace("*", "").strip() or None), "🗑️")
                     for d in restants[:25]], args=("suppr",))
-    teinte = "alerte" if any((dv.jours_restants(d) or 9) <= 0 for d in restants) \
+    teinte = "alerte" if any((r := dv.jours_restants(d)) is not None and r <= 0
+                              for d in restants) \
         else "devoir"
     return carte_composee("Devoirs", corps, teinte, sous_titre=sous,
                           boutons=actions, menus=[menu]), []
@@ -3728,17 +3729,14 @@ async def cmd_help(inter: discord.Interaction):
 # relire un sondage, creer un evenement) passe par ici, toutes les 30 s.
 # Chaque tache est independante : l'une qui echoue n'empeche pas les autres.
 def _etat_bot():
-    try:
-        data = json.loads(config.FICHIER_ETAT_BOT.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(config.FICHIER_ETAT_BOT, {})
 
 
 def _deja(cle):
     return cle in (_etat_bot().get("envoyes") or {})
 
 
+@stockage.exclusif(config.FICHIER_ETAT_BOT)
 def _marquer(cle):
     """Memorise un envoi (anti-doublon a travers les redemarrages), et purge
     ce qui a plus de 30 jours."""
@@ -3747,9 +3745,7 @@ def _marquer(cle):
     envoyes[cle] = datetime.now().isoformat(timespec="seconds")
     limite = (datetime.now() - timedelta(days=30)).isoformat()
     etat["envoyes"] = {k: v for k, v in envoyes.items() if v >= limite}
-    config.preparer_dossiers()
-    config.FICHIER_ETAT_BOT.write_text(json.dumps(etat, ensure_ascii=False, indent=1),
-                                       encoding="utf-8")
+    stockage.ecrire(config.FICHIER_ETAT_BOT, etat)
 
 
 async def _tic_rappels(maintenant):

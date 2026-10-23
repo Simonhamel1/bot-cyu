@@ -25,27 +25,21 @@ pari, et c'est lui qui devra assumer le kebab.
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 
 import config
+import stockage
 
 FICHIER = config.DONNEES / "predictions.json"
 
 
 # --- Lecture et ecriture -----------------------------------------------------
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (ValueError, OSError):
-        return []
+    return stockage.lire(FICHIER, [])
 
 
 def ecrire(liste):
-    config.preparer_dossiers()
-    FICHIER.write_text(json.dumps(liste, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+    stockage.ecrire(FICHIER, liste)
 
 
 def _trouver(liste, ident):
@@ -55,6 +49,7 @@ def _trouver(liste, ident):
 trouver = _trouver
 
 
+@stockage.exclusif(FICHIER)
 def ajouter(texte, auteur_id, auteur, echeance="", echeance_texte="", mise=""):
     liste = lire()
     p = {
@@ -75,6 +70,7 @@ def ajouter(texte, auteur_id, auteur, echeance="", echeance_texte="", mise=""):
     return p
 
 
+@stockage.exclusif(FICHIER)
 def voter(ident, user_id, nom, choix):
     """Vote « oui » ou « non ». Le meme vote deux fois = plus de vote.
 
@@ -93,6 +89,7 @@ def voter(ident, user_id, nom, choix):
     return p
 
 
+@stockage.exclusif(FICHIER)
 def trancher(ident, resultat, par_id):
     """L'auteur dit si c'est arrive (« oui ») ou non (« non »).
 
@@ -111,6 +108,7 @@ def trancher(ident, resultat, par_id):
     return p, "ok"
 
 
+@stockage.exclusif(FICHIER)
 def supprimer(ident, par_id):
     """Rend (prediction, "ok" | "absente" | "pas_auteur")."""
     liste = lire()

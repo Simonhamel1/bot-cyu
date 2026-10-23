@@ -389,7 +389,7 @@ def grille_semaine(cours, lundi, jours=None, couleurs=None):
                 cases[i] = TROU
 
         if couleurs:
-            morceau, courant, texte = [], None, ""
+            courant, texte = None, ""
             for case in cases:
                 if isinstance(case, tuple):
                     code = ANSI_DISTANCE if case[0] == "DIST" else ANSI.get(case[0], ANSI[""])

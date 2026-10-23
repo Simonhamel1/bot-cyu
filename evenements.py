@@ -19,10 +19,10 @@ Ce module calcule ce qui DEVRAIT exister ; bot.py parle a Discord.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timedelta
 
 import config
+import stockage
 import stats
 from celcat import normaliser
 
@@ -35,16 +35,11 @@ MARGE = timedelta(minutes=2)
 
 
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(FICHIER, {})
 
 
 def ecrire(data):
-    config.preparer_dossiers()
-    FICHIER.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    stockage.ecrire(FICHIER, data)
 
 
 def _cle(e):

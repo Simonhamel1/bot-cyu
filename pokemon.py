@@ -50,6 +50,7 @@ import unicodedata
 from datetime import datetime, timedelta
 
 import config
+import stockage
 
 FICHIER = config.DONNEES / "pokemon.json"
 CATALOGUE = config.DONNEES / "pokemon-noms.json"
@@ -99,22 +100,15 @@ class PokemonIndisponible(RuntimeError):
 
 # --- Lecture et ecriture -----------------------------------------------------
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {"quiz": [], "scores": {}}
-        data.setdefault("quiz", [])
-        data.setdefault("scores", {})
-        return data
-    except (ValueError, OSError):
-        return {"quiz": [], "scores": {}}
+    data = stockage.lire(FICHIER, {})
+    data.setdefault("quiz", [])
+    data.setdefault("scores", {})
+    return data
 
 
 def ecrire(data):
     data["quiz"] = data.get("quiz", [])[:QUIZ_GARDES]
-    FICHIER.parent.mkdir(parents=True, exist_ok=True)
-    FICHIER.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+    stockage.ecrire(FICHIER, data)
 
 
 # --- Le catalogue des especes -------------------------------------------------
@@ -269,6 +263,7 @@ def tirer(generation=None, choix=4, eviter=()):
     return espece, propositions
 
 
+@stockage.exclusif(FICHIER)
 def ouvrir(espece, propositions, salon_id=None, minutes=None):
     """Le quiz enregistre, pret a recevoir des reponses."""
     maintenant = datetime.now()
@@ -304,6 +299,7 @@ def derniers(nombre=8):
     return [q.get("espece") for q in lire().get("quiz", [])[:nombre]]
 
 
+@stockage.exclusif(FICHIER)
 def retenir_message(quiz_id, message_id, salon_id):
     """Ou le quiz a ete poste : la boucle en a besoin pour le reveler."""
     data = lire()
@@ -326,6 +322,7 @@ def _sans_fioritures(texte):
     return re.sub(r"[^a-z0-9]", "", texte.lower())
 
 
+@stockage.exclusif(FICHIER)
 def repondre(quiz_id, joueur_id, joueur, choix=None, tape=None):
     """Une reponse. Rend (etat, quiz, points).
 
@@ -385,6 +382,7 @@ def repondre(quiz_id, joueur_id, joueur, choix=None, tape=None):
     return ("juste" if juste else "rate"), quiz, points
 
 
+@stockage.exclusif(FICHIER)
 def reveler(quiz_id):
     """Marquer le quiz comme termine. Rend le quiz, ou None."""
     data = lire()

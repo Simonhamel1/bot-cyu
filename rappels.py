@@ -27,11 +27,11 @@ Un rappel :
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date, datetime, timedelta
 
 import config
+import stockage
 import devoirs as dv
 from celcat import normaliser
 
@@ -55,23 +55,18 @@ RE_HEURE = re.compile(
 
 # --- Lecture et ecriture -----------------------------------------------------
 def lire():
-    try:
-        data = json.loads(FICHIER.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (ValueError, OSError):
-        return []
+    return stockage.lire(FICHIER, [])
 
 
 def ecrire(liste):
-    config.preparer_dossiers()
-    FICHIER.write_text(json.dumps(liste, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+    stockage.ecrire(FICHIER, liste)
 
 
 def _trouver(liste, ident):
     return next((r for r in liste if str(r.get("id")) == str(ident)), None)
 
 
+@stockage.exclusif(FICHIER)
 def ajouter(texte, quand, auteur_id, auteur, salon_id, qui="moi"):
     liste = lire()
     r = {
@@ -90,6 +85,7 @@ def ajouter(texte, quand, auteur_id, auteur, salon_id, qui="moi"):
     return r
 
 
+@stockage.exclusif(FICHIER)
 def supprimer(ident, par_id):
     """Rend (rappel, "ok" | "absent" | "pas_auteur")."""
     liste = lire()
@@ -103,6 +99,7 @@ def supprimer(ident, par_id):
     return r, "ok"
 
 
+@stockage.exclusif(FICHIER)
 def retirer(ident):
     """Le rappel est parti : on l'oublie."""
     liste = lire()
@@ -113,6 +110,7 @@ def retirer(ident):
     return r
 
 
+@stockage.exclusif(FICHIER)
 def echec(ident):
     """Un envoi rate de plus. Rend True si le rappel est abandonne."""
     liste = lire()
@@ -177,7 +175,8 @@ def lire_moment(txt, cours=None, maintenant=None):
 
     # « ... matin / midi / soir » : un moment de la journee.
     heure = None
-    for mot, hm in MOMENTS.items():
+    # Les plus longs d'abord : « apres midi » finit aussi par « midi ».
+    for mot, hm in sorted(MOMENTS.items(), key=lambda kv: -len(kv[0])):
         if brut == mot or brut.endswith(" " + mot):
             heure = hm
             brut = brut[:-len(mot)].strip()

@@ -17,11 +17,11 @@ Un devoir est un simple dictionnaire, stocke en JSON :
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date, datetime, timedelta
 
 import config
+import stockage
 from celcat import _dt, normaliser
 
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -29,19 +29,14 @@ JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
 
 # ─── Lecture et ecriture ─────────────────────────────────────────────────────
 def lire():
-    try:
-        data = json.loads(config.FICHIER_DEVOIRS.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (ValueError, OSError):
-        return []
+    return stockage.lire(config.FICHIER_DEVOIRS, [])
 
 
 def ecrire(liste):
-    config.preparer_dossiers()
-    config.FICHIER_DEVOIRS.write_text(
-        json.dumps(liste, ensure_ascii=False, indent=1), encoding="utf-8")
+    stockage.ecrire(config.FICHIER_DEVOIRS, liste)
 
 
+@stockage.exclusif(config.FICHIER_DEVOIRS)
 def ajouter(titre, matiere, echeance, type_="devoir", note=""):
     liste = lire()
     devoir = {
@@ -59,6 +54,7 @@ def ajouter(titre, matiere, echeance, type_="devoir", note=""):
     return devoir
 
 
+@stockage.exclusif(config.FICHIER_DEVOIRS)
 def marquer_fait(ident):
     """True si le devoir existait, False sinon."""
     liste = lire()
@@ -70,6 +66,7 @@ def marquer_fait(ident):
     return False
 
 
+@stockage.exclusif(config.FICHIER_DEVOIRS)
 def supprimer(ident):
     """Le devoir supprime, ou None s'il n'existait pas."""
     liste = lire()

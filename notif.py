@@ -39,6 +39,7 @@ from pathlib import Path
 import requests
 
 import config
+import stockage
 
 API = "https://discord.com/api/v10"
 UA = "assistant-cyu/2.0"
@@ -96,6 +97,15 @@ def _entetes(mode):
     return {"User-Agent": UA}
 
 
+def _attente_429(r, defaut=2.0):
+    """Le retry_after d'une 429, borne a 10 s. Une 429 servie par Cloudflare
+    est une page HTML, pas du JSON : on ne doit pas planter dessus."""
+    try:
+        return min(float(r.json().get("retry_after", defaut)), 10)
+    except (ValueError, AttributeError, TypeError):
+        return defaut
+
+
 def _requete(methode, url, entetes, charge=None):
     """Une requete Discord qui ne leve jamais : une panne de Discord ne doit pas
     tuer un daemon qui tourne depuis trois semaines.
@@ -106,7 +116,7 @@ def _requete(methode, url, entetes, charge=None):
     try:
         r = requests.request(methode, url, json=charge, headers=entetes, timeout=15)
         if r.status_code == 429:
-            time.sleep(min(float(r.json().get("retry_after", 2)), 10))
+            time.sleep(_attente_429(r))
             r = requests.request(methode, url, json=charge, headers=entetes, timeout=15)
         return r
     except requests.RequestException as e:
@@ -147,7 +157,7 @@ def _poster(canal, charge, rendre_message=False):
         return None
 
 
-def _requete_fichier(methode, url, entetes, charge, chemin):
+def _requete_fichier(methode, url, entetes, charge, chemin, essai=0):
     """POST ou PATCH multipart : un embed ET une image, en une seule requete.
 
     Discord veut du multipart des qu'il y a une piece jointe, pas du JSON : la
@@ -163,9 +173,9 @@ def _requete_fichier(methode, url, entetes, charge, chemin):
     except (requests.RequestException, OSError) as e:
         print(f"[!] envoi de l'image echoue : {e}", flush=True)
         return None
-    if r.status_code == 429:
-        time.sleep(min(float(r.json().get("retry_after", 2)), 10))
-        return _requete_fichier(methode, url, entetes, charge, chemin)
+    if r.status_code == 429 and essai < 1:
+        time.sleep(_attente_429(r))
+        return _requete_fichier(methode, url, entetes, charge, chemin, essai + 1)
     return r
 
 
@@ -219,6 +229,7 @@ def envoyer_image(chemin, titre="", corps="", canal="commandes", couleur="cours"
 envoyer_fichier = envoyer_image
 
 
+@stockage.exclusif(FICHIER_MESSAGES)
 def epingler_image(cle, chemin, titre, corps="", couleur="cours", canal="edt",
                    pied=None):
     """Comme epingler(), mais le message porte une IMAGE reecrite sur place.
@@ -319,17 +330,11 @@ def simple(msg, ping=False, canal="logs"):
 
 # --- Messages vivants : un seul message, reecrit sur place -------------------
 def _lire_messages():
-    try:
-        data = json.loads(FICHIER_MESSAGES.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    return stockage.lire(FICHIER_MESSAGES, {})
 
 
 def _ecrire_messages(data):
-    config.preparer_dossiers()
-    FICHIER_MESSAGES.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                                encoding="utf-8")
+    stockage.ecrire(FICHIER_MESSAGES, data)
 
 
 def _url_message(mode, cible, message_id):
@@ -338,6 +343,7 @@ def _url_message(mode, cible, message_id):
     return f"{cible}/messages/{message_id}"
 
 
+@stockage.exclusif(FICHIER_MESSAGES)
 def epingler(cle, titre, corps, couleur="statut", canal="statut", pied=None,
              composants=None):
     """Ecrit UN message et le reecrit ensuite, au lieu d'en empiler.
@@ -388,6 +394,7 @@ def epingler(cle, titre, corps, couleur="statut", canal="statut", pied=None,
     return True
 
 
+@stockage.exclusif(FICHIER_MESSAGES)
 def oublier_message(cle):
     """Force la creation d'un nouveau message au prochain epingler()."""
     memoire = _lire_messages()
@@ -419,7 +426,7 @@ def _api(methode, chemin, **kw):
     if r.status_code == 404:
         raise EchecDiscord(f"introuvable (404) sur {chemin} : verifie l'identifiant.")
     if r.status_code == 429:
-        attente = float(r.json().get("retry_after", 5))
+        attente = _attente_429(r, 5.0)
         raise EchecDiscord(f"Discord limite le debit, reessaie dans {attente:.0f} s.")
     if r.status_code >= 400:
         raise EchecDiscord(f"HTTP {r.status_code} sur {chemin} : {r.text[:300]}")
