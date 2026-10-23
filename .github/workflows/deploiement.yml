@@ -1,0 +1,44 @@
+# Vérifie à chaque push que le bot s'installerait et démarrerait sur le serveur :
+# mêmes dépendances, même Python (Ubuntu 24.04 = 3.12), mêmes scripts.
+# Aucun secret n'est utilisé : config.yaml est recréé depuis l'exemple.
+name: Déploiement possible ?
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verifier:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dépendances (requirements.txt, comme installer.sh)
+        run: pip install -r requirements.txt
+
+      - name: Les modules compilent
+        run: python -m py_compile ./*.py cyu/*.py
+
+      - name: Les modules s'importent avec la config d'exemple
+        run: |
+          cp config.example.yaml config.yaml
+          python -c "import bot, assistant; from cyu import affichage, config, ecole, edt, image, promo"
+          python assistant.py --help > /dev/null
+
+      - name: Scripts de déploiement (syntaxe + shellcheck)
+        run: |
+          bash -n deploiement/installer.sh
+          bash -n deploiement/deployer.sh
+          shellcheck -S error deploiement/*.sh
+
+      - name: Unités systemd valides
+        run: |
+          # %h/bot-cyu doit pointer sur un vrai dossier pour que systemd valide ExecStart.
+          ln -s "$GITHUB_WORKSPACE" "$HOME/bot-cyu"
+          systemd-analyze verify --user deploiement/*.service
