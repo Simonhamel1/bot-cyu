@@ -33,11 +33,11 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import affichage
-import config
-import ecole
-import edt
-import promo
+from . import affichage
+from . import config
+from . import ecole
+from . import edt
+from . import promo
 
 
 try:

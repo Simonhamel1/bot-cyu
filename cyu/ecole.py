@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import config
+from . import config
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -367,8 +367,8 @@ def _lire_feuille(lignes):
 def fichier_maquette():
     """Le classeur M3C, ou None. config.yaml d'abord, sinon le premier trouve.
 
-    On regarde a la racine du projet puis dans donnees/ : deposer le fichier
-    a cote du bot doit suffire, sans rien configurer.
+    On regarde dans documents/, puis a la racine du projet, puis dans
+    donnees/ : deposer le fichier doit suffire, sans rien configurer.
     """
     choisi = getattr(config, "MAQUETTE_FICHIER", "")
     if choisi:
@@ -377,8 +377,11 @@ def fichier_maquette():
         # quelqu'un qui en a justement designe un, et qui s'est trompe d'une
         # lettre.
         chemin = Path(choisi)
-        return chemin if chemin.is_absolute() else config.RACINE / chemin
-    for dossier in (config.RACINE, config.DONNEES):
+        if chemin.is_absolute():
+            return chemin
+        dans_documents = config.DOCUMENTS / chemin
+        return dans_documents if dans_documents.exists() else config.RACINE / chemin
+    for dossier in (config.DOCUMENTS, config.RACINE, config.DONNEES):
         trouves = sorted(p for p in dossier.glob(MOTIF) if not p.name.startswith("~$"))
         if trouves:
             return trouves[0]
@@ -1127,8 +1130,11 @@ def fichier_alternance():
     if choisi:
         # Rendu meme s'il n'existe pas : c'est charger() qui dira son nom.
         chemin = Path(choisi)
-        return chemin if chemin.is_absolute() else config.RACINE / chemin
-    for dossier in (config.RACINE, config.DONNEES):
+        if chemin.is_absolute():
+            return chemin
+        dans_documents = config.DOCUMENTS / chemin
+        return dans_documents if dans_documents.exists() else config.RACINE / chemin
+    for dossier in (config.DOCUMENTS, config.RACINE, config.DONNEES):
         for motif in MOTIFS:
             trouves = sorted(p for p in dossier.glob(motif)
                              if not p.name.startswith("~$"))

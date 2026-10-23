@@ -26,9 +26,9 @@ from datetime import date, datetime, timedelta
 
 import discord
 
-import affichage
-import config
-import edt
+from . import affichage
+from . import config
+from . import edt
 
 
 # ════════════════════════════════════════════════════════════════════════════

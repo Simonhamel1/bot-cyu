@@ -83,13 +83,13 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-import affichage
+from cyu import affichage
 import assistant
-import config
-import ecole
-import edt
-import image
-import promo
+from cyu import config
+from cyu import ecole
+from cyu import edt
+from cyu import image
+from cyu import promo
 
 
 # Le daemon tourne-t-il dans le meme processus que le bot ? Mets False si tu
@@ -963,7 +963,7 @@ def _sans_maquette(souci):
          "",
          "**Comment la mettre en place**",
          "Dépose le classeur M3C de l'année (le fichier `.xlsx` publié par "
-         "l'école) à la racine du bot, à côté de `bot.py`. Tout nom qui "
+         "l'école) dans le dossier `documents/` du bot. Tout nom qui "
          "commence par `M3C` est reconnu.",
          "-# Un autre emplacement ? `classe.maquette:` dans `config.yaml` "
          "prend un chemin explicite.",
@@ -1443,7 +1443,7 @@ def _sans_calendrier(souci):
          "",
          "Le bot lit le **PDF officiel de la promo**, posé à la racine du "
          "projet — celui qui montre les semaines en entreprise et au centre.",
-         "-# Dépose-le à côté de `bot.py` (un nom qui contient « calendrier » "
+         "-# Dépose-le dans `documents/` (un nom qui contient « calendrier » "
          "ou « alternance » suffit), ou désigne-le dans `config.yaml` : "
          "`classe: calendrier: mon-fichier.pdf`."],
         "alerte")

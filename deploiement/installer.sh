@@ -5,11 +5,11 @@
 #     git clone https://github.com/<toi>/<depot>.git bot-cyu
 #     cd bot-cyu
 #     # deposer config.yaml ici (voir plus bas), puis :
-#     ./installer.sh
+#     ./deploiement/installer.sh
 #
 # Et pour chaque mise a jour ensuite :
 #
-#     cd ~/bot-cyu && git pull && ./installer.sh
+#     cd ~/bot-cyu && git pull && ./deploiement/installer.sh
 #
 # Ce que le script fait, dans l'ordre :
 #   1. verifie que config.yaml est present et rempli
@@ -50,7 +50,8 @@ for arg in "$@"; do
     esac
 done
 
-ICI="$(cd "$(dirname "$0")" && pwd)"
+# Le script vit dans deploiement/ : on travaille depuis la racine du depot.
+ICI="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ICI"
 
 echo "== dossier : $ICI =="
@@ -79,7 +80,8 @@ fi
 # On demande a config.py lui-meme : lui seul connait les valeurs par defaut de
 # config.example.yaml, donc lui seul sait ce qui manque vraiment.
 python3 -c "
-import sys, config
+import sys
+from cyu import config
 trous = config.manquants()
 if trous:
     print('[X] a remplir dans config.yaml :')
@@ -93,8 +95,8 @@ print('   config remplie.')
 chmod 600 config.yaml
 
 # ─── 2. Les modules compilent ────────────────────────────────────────────────
-python3 -m py_compile ./*.py
-rm -rf __pycache__
+python3 -m py_compile ./*.py cyu/*.py
+rm -rf __pycache__ cyu/__pycache__
 echo "   les modules compilent."
 
 # ─── 3. Dependances ──────────────────────────────────────────────────────────
@@ -161,14 +163,14 @@ installer_unite() {
     echo "   $UNITES/$nom.service"
 }
 
-installer_unite assistant-cyu.service "$SERVICE"
+installer_unite deploiement/assistant-cyu.service "$SERVICE"
 
 # uptime : par defaut on garde l'etat actuel du serveur.
 if [ -z "$AVEC_UPTIME" ]; then
     if [ -f "$UNITES/$SERVICE_UPTIME.service" ]; then AVEC_UPTIME=1; else AVEC_UPTIME=0; fi
 fi
 if [ "$AVEC_UPTIME" = "1" ]; then
-    installer_unite uptime-cyu.service "$SERVICE_UPTIME"
+    installer_unite deploiement/uptime-cyu.service "$SERVICE_UPTIME"
 else
     if [ -f "$UNITES/$SERVICE_UPTIME.service" ]; then
         systemctl --user disable --now "$SERVICE_UPTIME" >/dev/null 2>&1 || true
@@ -226,7 +228,7 @@ Le bot tourne. Dans #commandes : /panneau pour epingler les boutons.
         systemctl --user restart $SERVICE
 
     Mettre a jour :
-        cd $ICI && git pull && ./installer.sh
+        cd $ICI && git pull && ./deploiement/installer.sh
 
 ATTENTION : ne fais pas tourner le bot ici ET sur ta machine en meme temps, tu
 recevrais chaque briefing en double.

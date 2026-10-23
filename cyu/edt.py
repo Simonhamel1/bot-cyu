@@ -24,9 +24,9 @@ from getpass import getpass
 
 import requests
 
-import affichage
-import config
-import promo
+from . import affichage
+from . import config
+from . import promo
 
 
 # ════════════════════════════════════════════════════════════════════════════

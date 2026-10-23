@@ -2,7 +2,7 @@
 #
 # Envoie le projet sur ton serveur et l'y fait tourner en permanence.
 #
-#     ./deployer.sh utilisateur@ip_du_serveur
+#     ./deploiement/deployer.sh utilisateur@ip_du_serveur
 #
 # Ce que le script fait, dans l'ordre :
 #   1. verifie que ta config locale est remplie
@@ -22,11 +22,11 @@ SERVICE="assistant-cyu"
 
 if [ -z "$SERVEUR" ]; then
     cat <<'AIDE'
-Usage : ./deployer.sh utilisateur@ip_du_serveur [dossier_distant]
+Usage : ./deploiement/deployer.sh utilisateur@ip_du_serveur [dossier_distant]
 
 Exemples :
-    ./deployer.sh simon@192.168.1.42
-    ./deployer.sh root@vps.exemple.fr assistant
+    ./deploiement/deployer.sh simon@192.168.1.42
+    ./deploiement/deployer.sh root@vps.exemple.fr assistant
 
 Il te faut un acces SSH au serveur. Si tu tapes un mot de passe a chaque fois,
 installe ta cle une bonne fois pour toutes :
@@ -36,7 +36,8 @@ AIDE
     exit 1
 fi
 
-ICI="$(cd "$(dirname "$0")" && pwd)"
+# Le script vit dans deploiement/ : on travaille depuis la racine du depot.
+ICI="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ICI"
 
 # ─── 1. La config locale est-elle prete ? ────────────────────────────────────
@@ -49,7 +50,8 @@ if [ ! -f config.yaml ]; then
     exit 1
 fi
 python3 -c "
-import sys, config
+import sys
+from cyu import config
 trous = config.manquants()
 if trous:
     print('[X] a remplir dans config.yaml :')
@@ -57,8 +59,8 @@ if trous:
         print('    - ' + t)
     sys.exit(1)
 " || exit 1
-python3 -m py_compile ./*.py
-rm -rf __pycache__
+python3 -m py_compile ./*.py cyu/*.py
+rm -rf __pycache__ cyu/__pycache__
 echo "   config remplie, les modules compilent."
 
 # ─── 2. Copie ────────────────────────────────────────────────────────────────
@@ -146,7 +148,7 @@ Le bot tourne sur $SERVEUR.
         ssh $SERVEUR systemctl --user restart $SERVICE
 
     Mettre a jour apres une modification :
-        ./deployer.sh $SERVEUR
+        ./deploiement/deployer.sh $SERVEUR
 
 ATTENTION : n'ai pas le bot qui tourne ici ET la-bas en meme temps, tu
 recevrais chaque briefing en double. Arrete celui de ta machine.

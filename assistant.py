@@ -55,11 +55,11 @@ from urllib.parse import urlsplit
 
 import requests
 
-import affichage
-import config
-import edt
-import image
-import promo
+from cyu import affichage
+from cyu import config
+from cyu import edt
+from cyu import image
+from cyu import promo
 
 
 # Certains terminaux servent un stdout en cp1252 : sans ca, un simple print

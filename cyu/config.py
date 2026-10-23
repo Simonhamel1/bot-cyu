@@ -37,7 +37,8 @@ import time
 from pathlib import Path
 
 
-RACINE = Path(__file__).resolve().parent
+# Le dossier du depot : config.py vit dans cyu/, un cran plus bas.
+RACINE = Path(__file__).resolve().parent.parent
 FICHIER_CONFIG = RACINE / "config.yaml"
 FICHIER_EXEMPLE = RACINE / "config.example.yaml"
 
@@ -466,6 +467,8 @@ MATIERES = BRUT.get("matieres") if isinstance(BRUT.get("matieres"), dict) else {
 
 # --- Fichiers (rien a regler) ------------------------------------------------
 DONNEES = RACINE / "donnees"
+# Les documents de l'ecole : le classeur M3C et le PDF d'alternance.
+DOCUMENTS = RACINE / "documents"
 
 FICHIER_DEVOIRS = DONNEES / "devoirs.json"      # ton carnet de devoirs
 FICHIER_CACHE = DONNEES / "edt_cache.json"      # dernier emploi du temps connu

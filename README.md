@@ -67,7 +67,7 @@ que pour ce qui touche aujourd'hui ou demain.)
 ### Et il ne raconte pas n'importe quoi
 
 Un bot qui crie au loup, on finit par le couper. Quatre garde-fous, dans
-`edt.py` (section « le suivi des changements ») :
+`cyu/edt.py` (section « le suivi des changements ») :
 
 | Le piège | Ce qu'il fait |
 | --- | --- |
@@ -219,7 +219,7 @@ l'image en pièce jointe et **le classeur source** à ouvrir dans Excel ou
 LibreOffice.
 
 Ces chiffres ne sont recopiés nulle part dans le code : le bot lit le fichier
-**M3C** de l'école (`M3C_….xlsx`) posé à côté de `bot.py`. L'école publie une
+**M3C** de l'école (`M3C_….xlsx`) posé dans `documents/`. L'école publie une
 nouvelle version ? Tu remplaces le fichier, `/ects` suit **sans redémarrage**.
 Sans ce fichier, la commande explique où le mettre, et le bouton disparaît du
 panneau.
@@ -249,7 +249,7 @@ calendrier — chacun annoté de ce qu'il contient (« 9 j formation au centre �
 plus `◀ ▶` pour passer de mois en mois sans retaper la commande.
 
 Ces dates ne sont recopiées nulle part dans le code : le bot lit **le PDF
-officiel de la promo** posé à côté de `bot.py`. Ce PDF n'a aucun texte — tout
+officiel de la promo** posé dans `documents/`. Ce PDF n'a aucun texte — tout
 y a été converti en courbes à l'export — donc le bot y lit **la couleur des
 cases**, exactement ce que la légende du document définit. Il en déduit
 l'année scolaire en la recoupant avec les jours fériés et les week-ends, et le
@@ -397,7 +397,7 @@ interdisent à pip de toucher au Python du système. Deux façons de s'en sortir
 au choix :
 
 ```bash
-# 1. dans ton dossier personnel — c'est ce que fait installer.sh
+# 1. dans ton dossier personnel — c'est ce que fait deploiement/installer.sh
 pip3 install --user --break-system-packages -r requirements.txt
 
 # 2. dans un environnement isolé, si tu préfères
@@ -411,7 +411,7 @@ Le nom de `--break-system-packages` fait peur, mais avec `--user` tout part
 dans `~/.local` : les paquets système ne sont jamais touchés.
 
 Le plus simple sur un serveur reste de ne rien taper de tout ça et de lancer
-**`./installer.sh`**, qui s'en occupe.
+**`./deploiement/installer.sh`**, qui s'en occupe.
 
 `requests`, `discord.py`, `PyYAML`, et `Pillow` pour les images. Sans Pillow,
 tout fonctionne, mais tout sort en texte. Sur un serveur nu, installe aussi une
@@ -582,38 +582,38 @@ façon. Le document vient de l'école : à toi de décider s'il a sa place sur u
 dépôt public. Tant qu'il n'y est pas, il ne descend pas avec `git pull`.
 
 ```bash
-scp M3C_*.xlsx utilisateur@ip_du_serveur:~/bot-cyu/
-scp calendrier*.pdf utilisateur@ip_du_serveur:~/bot-cyu/
+scp documents/M3C_*.xlsx utilisateur@ip_du_serveur:~/bot-cyu/documents/
+scp documents/calendrier*.pdf utilisateur@ip_du_serveur:~/bot-cyu/documents/
 ```
 
 Puis, sur le serveur :
 
 ```bash
-cd ~/bot-cyu && ./installer.sh
+cd ~/bot-cyu && ./deploiement/installer.sh
 ```
 
 Et à chaque mise à jour, ensuite :
 
 ```bash
-cd ~/bot-cyu && git pull && ./installer.sh
+cd ~/bot-cyu && git pull && ./deploiement/installer.sh
 ```
 
-`installer.sh` vérifie que la config est remplie, installe les dépendances,
+`deploiement/installer.sh` vérifie que la config est remplie, installe les dépendances,
 contrôle le fuseau horaire, pose le service systemd et redémarre le bot. Il est
 idempotent : le relancer ne crée pas de doublon et ne touche **ni** à
 `config.yaml` **ni** à `donnees/`.
 
 ```bash
-./installer.sh --avec-uptime      # ajoute la surveillance du webmail
-./installer.sh --sans-uptime      # la retire
-./installer.sh --sans-demarrer    # tout préparer sans lancer le service
-./installer.sh --help
+./deploiement/installer.sh --avec-uptime      # ajoute la surveillance du webmail
+./deploiement/installer.sh --sans-uptime      # la retire
+./deploiement/installer.sh --sans-demarrer    # tout préparer sans lancer le service
+./deploiement/installer.sh --help
 ```
 
-### B. Par `deployer.sh` (depuis ta machine, sans GitHub)
+### B. Par `deploiement/deployer.sh` (depuis ta machine, sans GitHub)
 
 ```bash
-./deployer.sh utilisateur@ip_du_serveur
+./deploiement/deployer.sh utilisateur@ip_du_serveur
 ```
 
 Copie le projet en SSH (rsync, `config.yaml` compris), installe les dépendances,
@@ -673,12 +673,12 @@ systemctl --user stop assistant-cyu
 | --- | --- |
 | `config.yaml` | **toute** la configuration et les secrets — jamais sur GitHub |
 | `config.example.yaml` | toutes les options documentées, et les valeurs par défaut |
-| `config.py` | lit le YAML, complète avec l'exemple, expose les constantes — et le **stockage** des JSON de `donnees/` (écriture atomique, copie `.bak` relue si un fichier est abîmé, verrou par fichier) |
-| `edt.py` | **l'emploi du temps** : la connexion CELCAT et le cache, la détection des changements (annulé, déplacé, changement de salle…) et leur suivi (référence sur disque, garde-fous, journal d'un mois), ce que pèse une semaine (stats), la météo du trajet |
-| `promo.py` | **ce que la promo garde sur disque** : le carnet de devoirs, les rappels (et la grammaire de « quand »), les prédictions, les sondages, les anniversaires, les examens en événements Discord, le quiz Pokémon |
-| `ecole.py` | **les documents de l'école**, lus sans dépendance : la maquette M3C (UE, ECTS, coefficients) et le calendrier d'alternance (le PDF, recalé sur de vraies dates) |
-| `affichage.py` | **tout ce qui met en forme et envoie** : le texte (journée, grille, devoirs, .ics), les cartes Discord, l'aiguillage vers les salons, les tableaux vivants de `#statut` et `#edt` |
-| `image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours, le tableau de bord de la semaine (Pillow) |
+| `cyu/config.py` | lit le YAML, complète avec l'exemple, expose les constantes — et le **stockage** des JSON de `donnees/` (écriture atomique, copie `.bak` relue si un fichier est abîmé, verrou par fichier) |
+| `cyu/edt.py` | **l'emploi du temps** : la connexion CELCAT et le cache, la détection des changements (annulé, déplacé, changement de salle…) et leur suivi (référence sur disque, garde-fous, journal d'un mois), ce que pèse une semaine (stats), la météo du trajet |
+| `cyu/promo.py` | **ce que la promo garde sur disque** : le carnet de devoirs, les rappels (et la grammaire de « quand »), les prédictions, les sondages, les anniversaires, les examens en événements Discord, le quiz Pokémon |
+| `cyu/ecole.py` | **les documents de l'école**, lus sans dépendance : la maquette M3C (UE, ECTS, coefficients) et le calendrier d'alternance (le PDF, recalé sur de vraies dates) |
+| `cyu/affichage.py` | **tout ce qui met en forme et envoie** : le texte (journée, grille, devoirs, .ics), les cartes Discord, l'aiguillage vers les salons, les tableaux vivants de `#statut` et `#edt` |
+| `cyu/image.py` | **tout le rendu en images** : la journée, la période, les changements, les devoirs, le prochain cours, le tableau de bord de la semaine (Pillow) |
 | `assistant.py` | le daemon, la ligne de commande, et la surveillance du webmail (`python assistant.py uptime`) |
 | `bot.py` | le bot Discord : commandes slash, navigation par boutons, panneau, formulaires, et la boucle `tic` (rappels, anniversaires, résultats de sondages, point des prédictions, événements) |
 
@@ -686,10 +686,11 @@ Chaque fichier qui en regroupe plusieurs est découpé en sections, avec un
 bandeau `═══ … (ex-xxx.py)` en tête de chacune : on y retrouve l'ancien module
 et son explication. Les fonctions qui portaient le même nom dans deux anciens
 modules ont pris son nom en suffixe (`lire_devoirs`, `lire_rappels`…).
-| `installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
-| `deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
-| `assistant-cyu.service` | l'unité systemd du bot |
-| `uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
+| `deploiement/installer.sh` | à lancer **sur le serveur** : dépendances, service, démarrage |
+| `deploiement/deployer.sh` | à lancer **depuis ta machine** : envoie tout en SSH, puis installe |
+| `deploiement/assistant-cyu.service` | l'unité systemd du bot |
+| `deploiement/uptime-cyu.service` | l'unité systemd de la surveillance webmail (optionnelle) |
+| `documents/` | les documents de l'école que lisent `/ects` et `/calendrier` : le classeur M3C et le PDF d'alternance |
 | `requirements.txt` | les dépendances Python — **discord.py 2.7 au minimum** pour les cartes |
 | `donnees/` | cache, devoirs, prédictions, rappels, anniversaires, sondages, événements, état — local, jamais sur GitHub |
 

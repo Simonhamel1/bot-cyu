@@ -24,10 +24,10 @@ from uuid import uuid4
 import discord
 import requests
 
-import config
-import edt
-import image
-import promo
+from . import config
+from . import edt
+from . import image
+from . import promo
 
 
 # ════════════════════════════════════════════════════════════════════════════
