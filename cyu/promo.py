@@ -204,7 +204,7 @@ def resoudre_echeance(txt, cours, matiere=""):
         if c is None:
             raise ValueError(
                 f"aucun cours a venir ne correspond a « {cible or '?'} ». "
-                f"Ajoute un alias dans config.py > MATIERES, ou donne une date.")
+                f"Ajoute un alias dans config.yaml > matieres, ou donne une date.")
         return c.debut.isoformat(timespec="minutes")
 
     if bas in ("aujourd'hui", "aujourdhui", "auj", "ce soir"):

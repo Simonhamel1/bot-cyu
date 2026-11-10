@@ -705,5 +705,8 @@ modules ont pris son nom en suffixe (`lire_devoirs`, `lire_rappels`…).
 Si le jeton du bot fuit : portail développeur Discord → Bot → **Reset Token**,
 l'ancien devient aussitôt inutilisable.
 
-Rien n'est envoyé ailleurs qu'à `celcat-calendar.cyu.fr`, `mail.etu.cyu.fr` et
-`discord.com`.
+Tes identifiants CYU ne partent qu'à `celcat-calendar.cyu.fr`, et le jeton du
+bot qu'à `discord.com`. Le bot contacte aussi, sans rien y envoyer de
+personnel : `mail.etu.cyu.fr` (surveillance du webmail),
+`api.open-meteo.com` (les coordonnées de `meteo.latitude` / `longitude`) et
+`raw.githubusercontent.com` (les noms et images PokéAPI du quiz).

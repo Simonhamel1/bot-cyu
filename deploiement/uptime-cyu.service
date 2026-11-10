@@ -4,7 +4,8 @@
 # lui, le bot tourne normalement, seule la ligne « Webmail » du panneau
 # #statut reste vide.
 #
-# installer.sh l'installe si tu reponds oui, et reecrit le chemin tout seul.
+# installer.sh l'installe avec --avec-uptime (le retire avec --sans-uptime),
+# et reecrit le chemin tout seul.
 #
 # Logs :  journalctl --user -u uptime-cyu -f
 

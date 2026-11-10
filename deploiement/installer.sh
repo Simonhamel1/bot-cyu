@@ -15,7 +15,7 @@
 #   1. verifie que config.yaml est present et rempli
 #   2. verifie que les modules compilent
 #   3. installe / met a jour les dependances
-#   4. controle le fuseau horaire du serveur
+#   4. controle que le bot est a l'heure de son fuseau (config.yaml)
 #   5. installe le service systemd et (re)demarre le bot
 #
 # Il est idempotent : le relancer ne casse rien, ne cree pas de doublon, et ne
@@ -130,25 +130,12 @@ if ! ls /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
 fi
 
 # ─── 4. Fuseau horaire ───────────────────────────────────────────────────────
-# Le code lit l'heure locale du serveur, sans conversion. Un serveur en UTC
-# enverrait le briefing de 07:00 a 09:00 heure de Paris.
+# Le bot applique lui-meme le `fuseau:` de config.yaml a son processus : un
+# serveur en UTC ne decale plus rien. On lui demande donc l'heure qu'IL voit
+# (`assistant.py heure` sort en code 1 et explique quoi corriger si ca cloche).
 echo
 echo "== fuseau horaire =="
-FUSEAU="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo inconnu)"
-if [ "$FUSEAU" = "Europe/Paris" ]; then
-    echo "   $FUSEAU — les horaires de config.yaml sont bien de l'heure de Paris."
-else
-    cat <<AVERTISSEMENT
-   [!] fuseau du serveur : $FUSEAU
-
-   Les horaires de config.yaml (briefing 07:00, silence 23:00...) sont lus en
-   heure LOCALE du serveur. Tant qu'il n'est pas sur Europe/Paris, tes
-   briefings partiront decales. A corriger une fois :
-
-       sudo timedatectl set-timezone Europe/Paris
-       systemctl --user restart $SERVICE
-AVERTISSEMENT
-fi
+python3 assistant.py heure | sed 's/^/   /' || true
 
 # ─── 5. Service systemd ──────────────────────────────────────────────────────
 echo
